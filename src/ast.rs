@@ -1,3 +1,4 @@
+use logos::Span;
 use string_interner::DefaultSymbol as Symbol;
 use std::fmt::{
     Display,
@@ -6,14 +7,17 @@ use std::fmt::{
 };
 
 
-pub type Block = Vec<Stmt>;
+pub trait GetSpan {
+    fn span(&self)->Span;
+}
 
 
 #[derive(Debug)]
 pub enum Stmt {
-    Function(Function),
-    DeleteVar(Symbol),
+    Function(Span, Function),
+    DeleteVar(Span, Symbol),
     Class {
+        span: Span,
         name: Symbol,
         // TODO: types
         fields: Vec<(VarType, Symbol)>,
@@ -21,59 +25,109 @@ pub enum Stmt {
         methods: Vec<Function>,
     },
     CreateConst {
+        span: Span,
         name: Symbol,
         data: Expr,
     },
     CreateVar {
+        span: Span,
         var_type: VarType,
         name: Symbol,
         data: Option<Expr>,
     },
     SetVar {
+        span: Span,
         left: Expr,
         data: Expr,
     },
     If {
+        span: Span,
         conditions: Vec<(Expr, Block)>,
         default: Option<Block>,
     },
     WhileLoop {
+        span: Span,
         condition: Expr,
         body: Block,
     },
-    Expression(Expr),
+    Expression(Span, Expr),
+    Return(Span, Option<Expr>),
+    Continue(Span),
+    Break(Span),
+}
+impl GetSpan for Stmt {
+    fn span(&self)->Span {
+        use Stmt::*;
+        match self {
+            Function(span, _)|
+                DeleteVar(span, _)|
+                Class{span, ..}|
+                CreateConst{span,..}|
+                CreateVar{span,..}|
+                SetVar{span,..}|
+                If{span,..}|
+                WhileLoop{span,..}|
+                Expression(span, _)|
+                Return(span, _)|
+                Continue(span)|
+                Break(span)=>span.clone(),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub enum Expr {
     // Copy a variable instead of move.
-    Copy(Symbol),
-    BinaryOp(BinaryOp, Box<[Self;2]>),
-    UnaryOp(UnaryOp, Box<Self>),
-    Integer(u64),
-    Float(f64),
-    String(Symbol),
-    Named(Symbol),
-    Field(Box<Self>, Symbol),
+    Copy(Span, Symbol),
+    BinaryOp(Span, BinaryOp, Box<[Self;2]>),
+    UnaryOp(Span, UnaryOp, Box<Self>),
+    Integer(Span, i64),
+    Float(Span, f64),
+    String(Span, Symbol),
+    Named(Span, Symbol),
+    Field(Span, Box<Self>, Symbol),
     // the first item is the thing we call, or the function/method name, etc.
-    Call(Vec<Self>),
-    Bool(bool),
-    Ref(VarType, Symbol),
-    This,
+    Call(Span, Vec<Self>),
+    Bool(Span, bool),
+    Ref(Span, VarType, Symbol),
+    List(Span, Vec<Self>),
+    Index(Span, Box<[Self;2]>),
+    This(Span),
+}
+impl GetSpan for Expr {
+    fn span(&self)->Span {
+        use Expr::*;
+        match self {
+            Copy(span,..)|
+                BinaryOp(span,..)|
+                UnaryOp(span,..)|
+                Integer(span,..)|
+                Float(span,..)|
+                String(span,..)|
+                Named(span,..)|
+                Field(span,..)|
+                Call(span,..)|
+                Bool(span,..)|
+                Ref(span,..)|
+                List(span,..)|
+                Index(span,..)|
+                This(span,..)=>span.clone(),
+        }
+    }
 }
 impl Expr {
     fn is_literal(&self)->bool {
         use Expr::*;
         match self {
-            Named(_)|String(_)|Float(_)|Integer(_)|Bool(_)|This=>true,
+            Named(..)|String(..)|Float(..)|Integer(..)|Bool(..)|List(..)|This(..)=>true,
             _=>false,
         }
     }
 
-    fn is_field_call(&self)->bool {
+    fn is_trailing_expr(&self)->bool {
         use Expr::*;
         match self {
-            Field(..)|Call(..)=>true,
+            Field(..)|Call(..)|Index(..)=>true,
             _=>false,
         }
     }
@@ -84,15 +138,30 @@ impl Display for Expr {
         match self {
             // we don't have access to the string interner, so we make do by showing that symbols
             // are a placeholder
-            Copy(sym)=>write!(f, "copy <{:?}>", sym)?,
-            Named(sym)=>write!(f, "<{:?}>", sym)?,
-            String(sym)=>write!(f, "\"<{:?}>\"", sym)?,
-            Integer(i)=>write!(f,"{}", i)?,
-            Float(i)=>write!(f,"{}", i)?,
-            Bool(b)=>write!(f,"{}", b)?,
-            Ref(var_type, sym)=>write!(f,"ref {} <{:?}>", var_type, sym)?,
-            This=>write!(f,"this")?,
-            BinaryOp(op, items)=>{
+            Copy(_, sym)=>write!(f, "copy <{:?}>", sym)?,
+            Named(_, sym)=>write!(f, "<{:?}>", sym)?,
+            String(_, sym)=>write!(f, "\"<{:?}>\"", sym)?,
+            Integer(_, i)=>write!(f,"{}", i)?,
+            Float(_, i)=>write!(f,"{}", i)?,
+            Bool(_, b)=>write!(f,"{}", b)?,
+            Ref(_, var_type, sym)=>write!(f,"ref {} <{:?}>", var_type, sym)?,
+            This(_)=>write!(f,"this")?,
+            List(_, items)=>{
+                write!(f,"[")?;
+                if items.len()>0 {
+                    for item in &items[..items.len()-1] {
+                        if f.alternate() {
+                            write!(f,"{}, ",item)?;
+                        } else {
+                            write!(f,"{},",item)?;
+                        }
+                    }
+                    write!(f,"{}",items.last().unwrap())?;
+                }
+                write!(f,"]")?;
+            },
+            Index(_, items)=>write!(f,"{}[{}]",items[0],items[1])?,
+            BinaryOp(_, op, items)=>{
                 // parenthesize the left if it is not a literal expression
                 if items[0].is_literal() {
                     write!(f, "{}", items[0])?;
@@ -114,7 +183,7 @@ impl Display for Expr {
                     write!(f, "({})", items[1])?;
                 }
             },
-            UnaryOp(op, item)=>{
+            UnaryOp(_, op, item)=>{
                 // print the operator
                 write!(f, "{}", op)?;
 
@@ -125,15 +194,15 @@ impl Display for Expr {
                     write!(f, "({})", item)?;
                 }
             },
-            Field(left, name)=>if left.is_literal()||left.is_field_call() {
+            Field(_, left, name)=>if left.is_literal()||left.is_trailing_expr() {
                 // the left side is a literal, field, or call
                 write!(f, "{}.<{:?}>", left, name)?;
             } else {
                 // add parenthesis to a complex left expression
                 write!(f, "({}).<{:?}>", left, name)?;
             },
-            Call(items)=>{
-                if items[0].is_literal()||items[0].is_field_call() {
+            Call(_, items)=>{
+                if items[0].is_literal()||items[0].is_trailing_expr() {
                     write!(f,"{}(", items[0])?;
                 } else {
                     // add parenthesis to a complex left expression
@@ -240,8 +309,21 @@ impl Display for VarType {
 
 #[derive(Debug)]
 pub struct Function {
+    pub span: Span,
     pub name: Symbol,
     // TODO: types
-    pub params: Vec<Symbol>,
+    pub params: Vec<(Span, VarType, Symbol)>,
     pub body: Block,
+}
+impl GetSpan for Function {
+    fn span(&self)->Span {self.span.clone()}
+}
+
+#[derive(Debug)]
+pub struct Block {
+    pub span: Span,
+    pub body: Vec<Stmt>,
+}
+impl GetSpan for Block {
+    fn span(&self)->Span {self.span.clone()}
 }

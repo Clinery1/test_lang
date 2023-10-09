@@ -15,7 +15,7 @@ pub enum Token {
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", intern_string)]
     Ident(Symbol),
     #[regex(r"[0-9][0-9_]*", parse_integer)]
-    Integer(u64),
+    Integer(i64),
     #[regex(r"[0-9_]+\.[0-9_]+", parse_float)]
     Float(f64),
     #[token("function", |_|Keyword::Function)]
@@ -37,6 +37,9 @@ pub enum Token {
     #[token("and", |_|Keyword::And)]
     #[token("or", |_|Keyword::Or)]
     #[token("ref", |_|Keyword::Ref)]
+    #[token("return", |_|Keyword::Return)]
+    #[token("break", |_|Keyword::Break)]
+    #[token("continue", |_|Keyword::Continue)]
     Keyword(Keyword),
     #[token("(")]
     ParenStart,
@@ -113,6 +116,9 @@ pub enum Keyword {
     And,
     Or,
     Ref,
+    Return,
+    Break,
+    Continue,
 }
 
 
@@ -163,10 +169,10 @@ fn parse_float<'a>(lex: &mut Lexer<'a, Token>)->f64 {
         .unwrap()
 }
 
-// parse a u64 from the current token's string slice
-fn parse_integer<'a>(lex: &mut Lexer<'a, Token>)->u64 {
+// parse a i64 from the current token's string slice
+fn parse_integer<'a>(lex: &mut Lexer<'a, Token>)->i64 {
     lex
         .slice()
-        .parse::<u64>()
+        .parse::<i64>()
         .unwrap()
 }

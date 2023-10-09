@@ -11,12 +11,21 @@ use crate::{
 };
 
 
+/// A parser using techniques inspired by left-corner parsers, we have a (hopefully) linear-time
+/// parser. It is all hand-written, never backtracks, and uses 2 tokens of lookahead.
+///
+/// Using [`crate::benchmark_parser`] I was able to get ~170MB/s for all input sizes above 300
+/// lines up to 3000 lines on my 1165G7 Framework 13. I think this is plenty sufficient for regular
+/// use. If parse times become a problem, then I will revisit the parser and try optimizing it or
+/// something. Likely the bottlenecks will be static analysis, interpreting the code, and
+/// eventually code generation.
 pub struct Parser<'a> {
     pub lexer: SpannedIter<'a, Token>,
     lookahead: [Option<Result<Token, ()>>;2],
     spans: [Span;3],
 }
 impl<'a> Parser<'a> {
+    /// Create a new parser from a source string
     pub fn new(source: &'a str)->Self {
         let lexer = Token::lexer(source).spanned();
         let mut ret = Parser {
@@ -146,14 +155,44 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Class)=>self.parse_class_stmt(),
             Token::Keyword(Keyword::If)=>self.parse_if_stmt(),
             Token::Keyword(Keyword::While)=>self.parse_while_stmt(),
+            Token::Keyword(Keyword::Break)=>{
+                self.next()?;
+                Ok(Stmt::Break(self.span()))
+            },
+            Token::Keyword(Keyword::Continue)=>{
+                self.next()?;
+                Ok(Stmt::Continue(self.span()))
+            },
+            Token::Keyword(Keyword::Return)=>{
+                self.next()?;
+                let start = self.span().start;
+
+                let expr = match self.peek() {
+                    Ok(Token::Newline|Token::Semicolon)=>None,
+                    Ok(_)=>Some(self.parse_expr()?),
+                    Err(_)=>None,
+                };
+
+                let end = self.span().end;
+
+                Ok(Stmt::Return(start..end, expr))
+            },
             Token::Keyword(Keyword::Delete)=>{
                 self.next()?;
+                let start = self.span().start;
 
                 let name = self.ident()?;
 
-                Ok(Stmt::DeleteVar(name))
+                let end = self.span().end;
+
+                Ok(Stmt::DeleteVar(start..end, name))
             },
-            _=>self.parse_expr().map(Stmt::Expression),
+            _=>{
+                let start = self.peek_span().start;
+                let expr = self.parse_expr()?;
+                let end = self.span().end;
+                Ok(Stmt::Expression(start..end, expr))
+            },
         }?;
 
         match self.peek() {
@@ -170,12 +209,16 @@ impl<'a> Parser<'a> {
     /// parse a while loop statement
     fn parse_while_stmt(&mut self)->Result<Stmt, Error> {
         self.try_next(Token::Keyword(Keyword::While))?;
+        let start = self.span().start;
 
         let condition = self.parse_expr()?;
 
         let body = self.parse_block()?;
 
+        let end = self.span().end;
+
         return Ok(Stmt::WhileLoop {
+            span: start..end,
             condition,
             body,
         });
@@ -184,6 +227,7 @@ impl<'a> Parser<'a> {
     /// parse an if-if else-else statement
     fn parse_if_stmt(&mut self)->Result<Stmt, Error> {
         self.try_next(Token::Keyword(Keyword::If))?;
+        let start = self.span().start;
 
         let mut conditions = vec![
             (self.parse_expr()?, self.parse_block()?),
@@ -219,7 +263,10 @@ impl<'a> Parser<'a> {
             }
         }
 
+        let end = self.span().end;
+
         return Ok(Stmt::If {
+            span: start..end,
             conditions,
             default,
         });
@@ -228,11 +275,12 @@ impl<'a> Parser<'a> {
     /// parse a class definition statement
     fn parse_class_stmt(&mut self)->Result<Stmt, Error> {
         self.try_next(Token::Keyword(Keyword::Class))?;
+        let start = self.span().start;
 
         let name = self.ident()?;
 
         self.try_next(Token::CurlyStart)?;
-        let start = self.span();
+        let curly_start = self.span().start;
 
         let mut fields = Vec::new();
         let mut methods = Vec::new();
@@ -260,7 +308,7 @@ impl<'a> Parser<'a> {
                 Ok(_)=>return Err(Error::token(self.peek_span())),
                 Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
                     let span = self.peek_span();
-                    return Err(Error::new(start.start..span.end, ErrorType::UnclosedCurly));
+                    return Err(Error::new(curly_start..span.end, ErrorType::UnclosedCurly));
                 },
                 Err(e)=>return Err(e),
             }
@@ -276,7 +324,7 @@ impl<'a> Parser<'a> {
                 Ok(_)=>return Err(Error::new(self.peek_span(), ErrorType::LineEnding)),
                 Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
                     let span = self.peek_span();
-                    return Err(Error::new(start.start..span.end, ErrorType::UnclosedCurly));
+                    return Err(Error::new(curly_start..span.end, ErrorType::UnclosedCurly));
                 },
                 Err(e)=>return Err(e),
             }
@@ -284,7 +332,10 @@ impl<'a> Parser<'a> {
             self.skip_newline();
         }
 
+        let end = self.span().end;
+
         return Ok(Stmt::Class {
+            span: start..end,
             name,
             fields,
             methods,
@@ -294,6 +345,7 @@ impl<'a> Parser<'a> {
     /// parse a var set statement
     fn parse_set_var_stmt(&mut self)->Result<Stmt, Error> {
         self.try_next(Token::Keyword(Keyword::Set))?;
+        let start = self.span().start;
 
         let left = self.parse_expr()?;
 
@@ -301,12 +353,19 @@ impl<'a> Parser<'a> {
 
         let data = self.parse_expr()?;
 
-        return Ok(Stmt::SetVar {left, data});
+        let end = self.span().end;
+
+        return Ok(Stmt::SetVar {
+            span: start..end,
+            left,
+            data,
+        });
     }
 
     /// parse a const var statement
     fn parse_create_const_stmt(&mut self)->Result<Stmt, Error> {
         self.try_next(Token::Keyword(Keyword::Const))?;
+        let start = self.span().start;
 
         let name = self.ident()?;
 
@@ -314,7 +373,13 @@ impl<'a> Parser<'a> {
 
         let data = self.parse_expr()?;
 
-        return Ok(Stmt::CreateConst {name, data});
+        let end = self.span().end;
+
+        return Ok(Stmt::CreateConst {
+            span: start..end,
+            name,
+            data,
+        });
     }
 
     /// Parses the var type. Used multiple places
@@ -337,6 +402,7 @@ impl<'a> Parser<'a> {
 
     /// parses a var creation statement
     fn parse_create_var_stmt(&mut self)->Result<Stmt, Error> {
+        let start = self.peek_span().start;
         let var_type = self.parse_var_type()?;
 
         let name = self.ident()?;
@@ -349,7 +415,10 @@ impl<'a> Parser<'a> {
             _=>None,
         };
 
+        let end = self.span().end;
+
         return Ok(Stmt::CreateVar {
+            span: start..end,
             var_type,
             name,
             data,
@@ -359,30 +428,49 @@ impl<'a> Parser<'a> {
     /// parses a full function using the abbreviated helper function
     fn parse_function_stmt(&mut self)->Result<Stmt, Error> {
         self.try_next(Token::Keyword(Keyword::Function))?;
+        let start = self.span().start;
 
-        return self.parse_abrv_function_stmt().map(Stmt::Function);
+        let func = self.parse_abrv_function_stmt()?;
+
+        let end = self.span().end;
+
+        return Ok(Stmt::Function(start..end, func));
     }
 
     /// a function statement used in class definitions and the inner part of a normal function
     /// definition.
     fn parse_abrv_function_stmt(&mut self)->Result<Function, Error> {
         let name = self.ident()?;
+        let start = self.span().start;
 
-        let params = self.parse_paren_list(Self::ident)?;
+        let params = self.parse_paren_list(Self::parse_function_param)?;
 
         let body = self.parse_block()?;
 
+        let end = self.span().end;
+
         return Ok(Function {
+            span: start..end,
             name,
             params,
             body,
         });
     }
 
+    fn parse_function_param(&mut self)->Result<(Span, VarType, Symbol), Error> {
+        let start = self.peek_span().start;
+        let var_type = self.parse_var_type()?;
+
+        let name = self.ident()?;
+        let end = self.span().end;
+
+        return Ok((start..end, var_type, name));
+    }
+
     /// parse a block of statements in curly brackets
-    fn parse_block(&mut self)->Result<Vec<Stmt>, Error> {
+    fn parse_block(&mut self)->Result<Block, Error> {
         self.try_next(Token::CurlyStart)?;
-        let start = self.span();
+        let start = self.span().start;
 
         let mut items = Vec::new();
 
@@ -399,7 +487,7 @@ impl<'a> Parser<'a> {
                 Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
                     let span = self.peek_span();
 
-                    return Err(Error::new(start.start..span.end, ErrorType::UnclosedCurly));
+                    return Err(Error::new(start..span.end, ErrorType::UnclosedCurly));
                 },
                 // return all other errors
                 Err(e)=>return Err(e),
@@ -409,7 +497,7 @@ impl<'a> Parser<'a> {
                         Ok(s)=>s,
                         Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
                             let span = self.peek_span();
-                            return Err(Error::new(start.start..span.end, ErrorType::UnclosedCurly));
+                            return Err(Error::new(start..span.end, ErrorType::UnclosedCurly));
                         },
                         Err(e)=>return Err(e),
                     };
@@ -418,7 +506,12 @@ impl<'a> Parser<'a> {
             }
         }
 
-        return Ok(items);
+        let end = self.span().end;
+
+        return Ok(Block {
+            span: start..end,
+            body: items,
+        });
     }
 
     /// Parse a single expression
@@ -426,16 +519,20 @@ impl<'a> Parser<'a> {
         let left = match self.peek()? {
             Token::Keyword(Keyword::Copy)=>{
                 self.next()?;
+                let start = self.span().start;
                 let name = self.ident()?;
-                Expr::Copy(name)
+                let end = self.span().end;
+                Expr::Copy(start..end, name)
             },
             Token::Keyword(Keyword::Ref)=>{
                 self.next()?;
+                let start = self.span().start;
                 let var_type = self.parse_var_type()?;
 
                 let name = self.ident()?;
+                let end = self.span().end;
 
-                Expr::Ref(var_type, name)
+                Expr::Ref(start..end, var_type, name)
             },
             Token::Not|Token::Sub=>self.parse_unary_op_expr()?,
             _=>self.parse_bin_op_expr()?,
@@ -448,19 +545,55 @@ impl<'a> Parser<'a> {
     fn parse_tail_expr(&mut self, mut left: Expr)->Result<Expr, Error> {
         loop {
             match self.peek() {
+                // Index
+                Ok(Token::SquareStart)=>{
+                    self.next()?;
+                    let start = self.span().start;
+
+                    self.skip_newline();
+
+                    let right = match self.parse_expr() {
+                        Ok(e)=>e,
+                        Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
+                            let span = self.peek_span();
+                            return Err(Error::new(start..span.end, ErrorType::UnclosedSquare));
+                        },
+                        Err(e)=>return Err(e),
+                    };
+
+                    self.skip_newline();
+
+                    match self.next() {
+                        Ok(Token::SquareEnd)=>{},
+                        Ok(_)=>return Err(Error::token(self.span())),
+                        Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
+                            let span = self.peek_span();
+                            return Err(Error::new(start..span.end, ErrorType::UnclosedSquare));
+                        },
+                        Err(e)=>return Err(e),
+                    }
+
+                    let end = self.span().end;
+
+                    left = Expr::Index(start..end, Box::new([left, right]));
+                },
                 // Field
                 Ok(Token::Dot)=>{
                     self.next()?;
+                    let start = self.span().start;
                     let name = self.ident()?;
+                    let end = self.span().end;
 
-                    left = Expr::Field(Box::new(left), name);
+                    left = Expr::Field(start..end, Box::new(left), name);
                 },
                 // Function call
                 Ok(Token::ParenStart)=>{
+                    let start = self.peek_span().start;
                     let mut items = self.parse_paren_list(Self::parse_expr)?;
                     items.insert(0, left);
+                    let end = self.span().end;
 
-                    left = Expr::Call(items);
+                    left = Expr::Call(start..end, items);
                 },
                 Ok(Token::Newline)=>{
                     match self.peek1() {
@@ -484,7 +617,7 @@ impl<'a> Parser<'a> {
     fn parse_paren_list<T, F:FnMut(&mut Self)->Result<T, Error>>(&mut self, mut f: F)->Result<Vec<T>, Error> {
         // match the starting parenthesis and store the span of it
         self.try_next(Token::ParenStart)?;
-        let start = self.span();
+        let start = self.span().start;
 
         // parse the inner expressions
         let mut items = Vec::new();
@@ -501,7 +634,7 @@ impl<'a> Parser<'a> {
                 // entire parsed area
                 Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
                     let span = self.peek_span();
-                    return Err(Error::new(start.start..span.end, ErrorType::UnclosedParen));
+                    return Err(Error::new(start..span.end, ErrorType::UnclosedParen));
                 },
                 // otherwise parse the next expression
                 _=>{
@@ -509,7 +642,7 @@ impl<'a> Parser<'a> {
                         Ok(e)=>e,
                         Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
                             let span = self.peek_span();
-                            return Err(Error::new(start.start..span.end, ErrorType::UnclosedParen));
+                            return Err(Error::new(start..span.end, ErrorType::UnclosedParen));
                         },
                         Err(e)=>return Err(e),
                     };
@@ -529,7 +662,7 @@ impl<'a> Parser<'a> {
                 // EOF errors are converted to unclosed paren errors
                 Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
                     let span = self.peek_span();
-                    return Err(Error::new(start.start..span.end, ErrorType::UnclosedParen));
+                    return Err(Error::new(start..span.end, ErrorType::UnclosedParen));
                 },
                 // return other errors
                 Err(e)=>return Err(e),
@@ -570,6 +703,7 @@ impl<'a> Parser<'a> {
 
     /// parse a binary operation, if we can.
     fn parse_bin_op_expr(&mut self)->Result<Expr, Error> {
+        let start = self.peek_span().start;
         // parse the left side
         let left = self.parse_paren_expr()?;
 
@@ -591,8 +725,9 @@ impl<'a> Parser<'a> {
 
         // parse the right expression
         let right = self.parse_paren_expr()?;
+        let end = self.span().end;
 
-        return Ok(Expr::BinaryOp(op, Box::new([left, right])));
+        return Ok(Expr::BinaryOp(start..end, op, Box::new([left, right])));
     }
 
     /// parse a unary expression
@@ -603,11 +738,13 @@ impl<'a> Parser<'a> {
             Token::Not=>UnaryOp::Not,
             _=>return Err(Error::token(self.span())),
         };
+        let start = self.span().start;
 
         // parse the right side
         let expr = self.parse_paren_expr()?;
+        let end = self.span().end;
 
-        return Ok(Expr::UnaryOp(op, Box::new(expr)));
+        return Ok(Expr::UnaryOp(start..end, op, Box::new(expr)));
     }
 
     /// parse an expression in parenthesis or a literal expression
@@ -618,14 +755,14 @@ impl<'a> Parser<'a> {
                 self.next()?;
 
                 // store the start
-                let start = self.span();
+                let start = self.span().start;
 
                 // parse the inner
                 let expr = match self.parse_expr() {
                     Ok(e)=>e,
                     Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
                         let span = self.peek_span();
-                        return Err(Error::new(start.start..span.end, ErrorType::UnclosedParen));
+                        return Err(Error::new(start..span.end, ErrorType::UnclosedParen));
                     },
                     Err(e)=>return Err(e),
                 };
@@ -634,7 +771,7 @@ impl<'a> Parser<'a> {
                 match self.try_next(Token::ParenEnd) {
                     Err(_)=>{
                         let span = self.peek_span();
-                        return Err(Error::new(start.start..span.end, ErrorType::UnclosedParen));
+                        return Err(Error::new(start..span.end, ErrorType::UnclosedParen));
                     },
                     _=>{},
                 }
@@ -647,14 +784,59 @@ impl<'a> Parser<'a> {
 
     /// parse a literal expression
     fn parse_literal_expr(&mut self)->Result<Expr, Error> {
+        let start = self.peek_span();
         match self.next()? {
-            Token::Ident(i)=>Ok(Expr::Named(i)),
-            Token::Integer(i)=>Ok(Expr::Integer(i)),
-            Token::Float(f)=>Ok(Expr::Float(f)),
-            Token::String(s)=>Ok(Expr::String(s)),
-            Token::Keyword(Keyword::True)=>Ok(Expr::Bool(true)),
-            Token::Keyword(Keyword::False)=>Ok(Expr::Bool(false)),
-            Token::Keyword(Keyword::This)=>Ok(Expr::This),
+            Token::Ident(i)=>Ok(Expr::Named(start, i)),
+            Token::Integer(i)=>Ok(Expr::Integer(start, i)),
+            Token::Float(f)=>Ok(Expr::Float(start, f)),
+            Token::String(s)=>Ok(Expr::String(start, s)),
+            Token::Keyword(Keyword::True)=>Ok(Expr::Bool(start, true)),
+            Token::Keyword(Keyword::False)=>Ok(Expr::Bool(start, false)),
+            Token::Keyword(Keyword::This)=>Ok(Expr::This(start)),
+            Token::SquareStart=>{
+                let start = self.span().start;
+                let mut items = Vec::new();
+
+                loop {
+                    self.skip_newline();
+
+                    match self.peek() {
+                        Ok(Token::SquareEnd)=>{
+                            self.next()?;
+                            break;
+                        },
+                        Ok(_)=>match self.parse_expr() {
+                            Ok(e)=>items.push(e),
+                            Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
+                                let span = self.peek_span();
+                                return Err(Error::new(start..span.end, ErrorType::UnclosedSquare));
+                            },
+                            Err(e)=>return Err(e),
+                        },
+                        Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
+                            let span = self.peek_span();
+                            return Err(Error::new(start..span.end, ErrorType::UnclosedSquare));
+                        },
+                        Err(e)=>return Err(e),
+                    }
+
+                    self.skip_newline();
+
+                    match self.next() {
+                        Ok(Token::SquareEnd)=>break,
+                        Ok(Token::Comma)=>{},
+                        Ok(_)=>return Err(Error::token(self.span())),
+                        Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
+                            let span = self.peek_span();
+                            return Err(Error::new(start..span.end, ErrorType::UnclosedSquare));
+                        },
+                        Err(e)=>return Err(e),
+                    }
+                }
+                let end = self.span().end;
+
+                Ok(Expr::List(start..end, items))
+            },
             _=>Err(Error::token(self.span())),
         }
     }
