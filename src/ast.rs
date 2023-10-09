@@ -6,6 +6,9 @@ use std::fmt::{
 };
 
 
+pub type Block = Vec<Stmt>;
+
+
 #[derive(Debug)]
 pub enum Stmt {
     Function(Function),
@@ -13,19 +16,32 @@ pub enum Stmt {
     Class {
         name: Symbol,
         // TODO: types
-        fields: Vec<Symbol>,
+        fields: Vec<(VarType, Symbol)>,
 
         methods: Vec<Function>,
     },
+    CreateConst {
+        name: Symbol,
+        data: Expr,
+    },
     CreateVar {
-        mutability: VarType,
+        var_type: VarType,
         name: Symbol,
         data: Option<Expr>,
     },
     SetVar {
-        name: Symbol,
+        left: Expr,
         data: Expr,
     },
+    If {
+        conditions: Vec<(Expr, Block)>,
+        default: Option<Block>,
+    },
+    WhileLoop {
+        condition: Expr,
+        body: Block,
+    },
+    Expression(Expr),
 }
 
 #[derive(Debug)]
@@ -42,12 +58,14 @@ pub enum Expr {
     // the first item is the thing we call, or the function/method name, etc.
     Call(Vec<Self>),
     Bool(bool),
+    Ref(VarType, Symbol),
+    This,
 }
 impl Expr {
     fn is_literal(&self)->bool {
         use Expr::*;
         match self {
-            Named(_)|String(_)|Float(_)|Integer(_)|Bool(_)=>true,
+            Named(_)|String(_)|Float(_)|Integer(_)|Bool(_)|This=>true,
             _=>false,
         }
     }
@@ -72,6 +90,8 @@ impl Display for Expr {
             Integer(i)=>write!(f,"{}", i)?,
             Float(i)=>write!(f,"{}", i)?,
             Bool(b)=>write!(f,"{}", b)?,
+            Ref(var_type, sym)=>write!(f,"ref {} <{:?}>", var_type, sym)?,
+            This=>write!(f,"this")?,
             BinaryOp(op, items)=>{
                 // parenthesize the left if it is not a literal expression
                 if items[0].is_literal() {
@@ -154,6 +174,8 @@ pub enum BinaryOp {
     Less,
     GreaterEqual,
     LessEqual,
+    LogicAnd,
+    LogicOr,
 }
 impl Display for BinaryOp {
     fn fmt(&self, f: &mut Formatter)->FmtResult {
@@ -169,6 +191,8 @@ impl Display for BinaryOp {
             Self::Less=>write!(f,"<"),
             Self::GreaterEqual=>write!(f,">="),
             Self::LessEqual=>write!(f,"<="),
+            Self::LogicAnd=>write!(f,"and"),
+            Self::LogicOr=>write!(f,"or"),
         }
     }
 }
@@ -191,22 +215,33 @@ impl Display for UnaryOp {
 bitflags::bitflags! {
     #[derive(Debug)]
     pub struct VarType: u32 {
-        /// Fully constant; data is stored in the program binary (WIP)
-        const CONST =   0b001;
-        /// A variable that can have data reassigned to it before it is deleted
-        const VAR =     0b010;
-        /// An immutable variable
-        const VAL =     0b000;
-        /// A modifier to allow mutating of data in a variable (excluding `const` data)
-        const MUT =     0b100;
+        /// Allows assigning a new value of the same type to the container.
+        /// example: `set x = 5`
+        const REASSIGN =    0b01;
+        /// Allows mutation of the data in the container
+        /// example: `list.push(5)`
+        const MUTATE =      0b10;
+    }
+}
+impl Display for VarType {
+    fn fmt(&self, f: &mut Formatter)->FmtResult {
+        if self.contains(VarType::MUTATE) {
+            write!(f, "mut ")?;
+        }
+
+        if self.contains(VarType::REASSIGN) {
+            write!(f, "var")
+        } else {
+            write!(f,"let")
+        }
     }
 }
 
 
 #[derive(Debug)]
 pub struct Function {
-    name: Symbol,
+    pub name: Symbol,
     // TODO: types
-    params: Vec<Symbol>,
-    body: Vec<Stmt>,
+    pub params: Vec<Symbol>,
+    pub body: Block,
 }

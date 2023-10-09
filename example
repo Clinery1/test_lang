@@ -1,11 +1,20 @@
-1 + (1 * 2)
-   
-    
-     
-      
-    .field(
-        1,
-        2,
-        3,
-        4,
-    )
+function fizzBuzz() {
+    var count = 100
+
+    while count > 0 {
+        let five = (count % 5) == 0
+        let three = (count % 3) == 0
+
+        if five and three {
+            print("FizzBuzz")
+        } else if three {
+            print("Fizz")
+        } else if five {
+            print("Buzz")
+        } else {
+            print(count)
+        }
+
+        set count = count - 1
+    }
+}

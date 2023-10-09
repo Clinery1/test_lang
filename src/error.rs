@@ -9,8 +9,11 @@ pub enum ErrorType {
     ExpectedToken(Token),
     ExpectedIdent,
     UnclosedParen,
+    UnclosedCurly,
+    UnclosedSquare,
     UnexpectedToken,
     UnexpectedEOF,
+    LineEnding,
 }
 
 
@@ -108,8 +111,9 @@ impl Error {
                 eprintln!("{} │ {}", line_num, line);
             }
 
-            // find the difference between the start and end points
-            let start_end_delta = self.end - self.start;
+            // find the difference between the start and end points. subtract one because it
+            // otherwise looks weird
+            let start_end_delta = (self.end - self.start).saturating_sub(1);
 
             if start_end_delta > 1 {
                 // if the difference is more than 1 character, then line characters showing the start
@@ -119,6 +123,7 @@ impl Error {
                 // otherwise, just print a carat to show the error location
                 eprintln!("{:number_width$}   {:start_offset$}^", " ", "");
             }
+
             // print the error message on another line
             eprintln!("{:number_width$}   {:start_offset$} {:?}", " ", "", self.err_type);
         } else {    // multi line error

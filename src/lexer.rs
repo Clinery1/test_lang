@@ -20,17 +20,23 @@ pub enum Token {
     Float(f64),
     #[token("function", |_|Keyword::Function)]
     #[token("var", |_|Keyword::Var)]
-    #[token("val", |_|Keyword::Val)]
+    #[token("let", |_|Keyword::Let)]
     #[token("const", |_|Keyword::Const)]
     #[token("class", |_|Keyword::Class)]
     #[token("this", |_|Keyword::This)]
     #[token("super", |_|Keyword::Super)]
-    #[token("mut", |_|Keyword::Mutable)]
+    #[token("mut", |_|Keyword::Mut)]
     #[token("set", |_|Keyword::Set)]
     #[token("copy", |_|Keyword::Copy)]
     #[token("true", |_|Keyword::True)]
     #[token("false", |_|Keyword::False)]
     #[token("delete", |_|Keyword::Delete)]
+    #[token("if", |_|Keyword::If)]
+    #[token("else", |_|Keyword::Else)]
+    #[token("while", |_|Keyword::While)]
+    #[token("and", |_|Keyword::And)]
+    #[token("or", |_|Keyword::Or)]
+    #[token("ref", |_|Keyword::Ref)]
     Keyword(Keyword),
     #[token("(")]
     ParenStart,
@@ -90,17 +96,23 @@ pub enum Token {
 pub enum Keyword {
     Function,
     Var,
-    Val,
+    Let,
     Const,
     Class,
     This,
     Super,
-    Mutable,
+    Mut,
     Set,
     Copy,
     True,
     False,
     Delete,
+    If,
+    Else,
+    While,
+    And,
+    Or,
+    Ref,
 }
 
 
