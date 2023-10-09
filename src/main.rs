@@ -1,8 +1,9 @@
 //! TODO:
+//!     - COMMENT THE CODE!
 //!     - proper error handling
 //!     - finish parser
 //!     - tree-walking interpreter
-//!     - comments
+//!     - parse comments
 //!     - static analysis
 //!     - types
 

@@ -64,6 +64,8 @@ impl Display for Expr {
     fn fmt(&self, f: &mut Formatter)->FmtResult {
         use Expr::*;
         match self {
+            // we don't have access to the string interner, so we make do by showing that symbols
+            // are a placeholder
             Copy(sym)=>write!(f, "copy <{:?}>", sym)?,
             Named(sym)=>write!(f, "<{:?}>", sym)?,
             String(sym)=>write!(f, "\"<{:?}>\"", sym)?,
@@ -71,18 +73,21 @@ impl Display for Expr {
             Float(i)=>write!(f,"{}", i)?,
             Bool(b)=>write!(f,"{}", b)?,
             BinaryOp(op, items)=>{
+                // parenthesize the left if it is not a literal expression
                 if items[0].is_literal() {
                     write!(f, "{}", items[0])?;
                 } else {
                     write!(f, "({})", items[0])?;
                 }
 
+                // add spaces if we need to and print the operator
                 if f.alternate() {
                     write!(f, " {} ", op)?;
                 } else {
                     write!(f, "{}", op)?;
                 }
 
+                // parenthesize the right if it is not a literal expression
                 if items[1].is_literal() {
                     write!(f, "{}", items[1])?;
                 } else {
@@ -90,7 +95,10 @@ impl Display for Expr {
                 }
             },
             UnaryOp(op, item)=>{
+                // print the operator
                 write!(f, "{}", op)?;
+
+                // parenthesize the inner expression if it is not a literal
                 if item.is_literal() {
                     write!(f, "{}", item)?;
                 } else {
@@ -98,19 +106,25 @@ impl Display for Expr {
                 }
             },
             Field(left, name)=>if left.is_literal()||left.is_field_call() {
+                // the left side is a literal, field, or call
                 write!(f, "{}.<{:?}>", left, name)?;
             } else {
+                // add parenthesis to a complex left expression
                 write!(f, "({}).<{:?}>", left, name)?;
             },
             Call(items)=>{
                 if items[0].is_literal()||items[0].is_field_call() {
                     write!(f,"{}(", items[0])?;
                 } else {
+                    // add parenthesis to a complex left expression
                     write!(f,"({})(", items[0])?;
                 }
+                // if we have arguments to the call, print them
                 if items.len() > 1 {
+                    // print second to second-to-last args
                     for item in &items[1..items.len()-1] {
                         write!(f, "{}", item)?;
+                        // add space if needed
                         if f.alternate() {
                             write!(f, ", ")?;
                         } else {
@@ -177,9 +191,13 @@ impl Display for UnaryOp {
 bitflags::bitflags! {
     #[derive(Debug)]
     pub struct VarType: u32 {
+        /// Fully constant; data is stored in the program binary (WIP)
         const CONST =   0b001;
+        /// A variable that can have data reassigned to it before it is deleted
         const VAR =     0b010;
+        /// An immutable variable
         const VAL =     0b000;
+        /// A modifier to allow mutating of data in a variable (excluding `const` data)
         const MUT =     0b100;
     }
 }

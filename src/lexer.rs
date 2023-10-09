@@ -78,7 +78,9 @@ pub enum Token {
     Semicolon,
     #[token("!")]
     Not,
-    #[regex("\n+")]
+    // we have to include whitespace here or we will get multiple newline tokens emitted if there
+    // is a line containing only whitespace
+    #[regex("\n[ \t\r\n]*")]
     Newline,
     #[token("\"", parse_string)]
     String(Symbol),
@@ -107,33 +109,41 @@ fn parse_string<'a>(lex: &mut Lexer<'a, Token>)->Option<Symbol> {
     let mut finished = false;
 
     for c in lex.remainder().chars() {
-        if !escape {
-            if c == '"' {
+        if !escape {    // if we are not in an escape
+            if c == '"' {   // break the loop on double quote
                 finished = true;
                 break;
             }
+            // set escape if the current character is a backslash
             escape = c == '\\';
         } else {
+            // reset escape if it is on
             escape = false;
         }
 
+        // bump the lexer by how many bytes c takes up
         lex.bump(c.len_utf8());
     }
 
-    if !finished {
+    if !finished {  // if we reached EOF, then return None
         return None;
     }
 
+    // slice the string to remove the leading quote
     let string = &lex.slice()[1..];
+    // bump the lexer past the trailing quote
     lex.bump(1);
 
+    // intern the string, because using `Symbol` is easier than `&'a str` and faster than `String`
     return Some(lex.extras.get_or_intern(string));
 }
 
+// intern the string slice of the current token and return the symbol
 fn intern_string<'a>(lex: &mut Lexer<'a, Token>)->Symbol {
     lex.extras.get_or_intern(lex.slice())
 }
 
+// parse an f64 from the current token's string slice
 fn parse_float<'a>(lex: &mut Lexer<'a, Token>)->f64 {
     lex
         .slice()
@@ -141,6 +151,7 @@ fn parse_float<'a>(lex: &mut Lexer<'a, Token>)->f64 {
         .unwrap()
 }
 
+// parse a u64 from the current token's string slice
 fn parse_integer<'a>(lex: &mut Lexer<'a, Token>)->u64 {
     lex
         .slice()
