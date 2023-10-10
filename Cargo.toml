@@ -7,5 +7,6 @@ edition = "2021"
 
 [dependencies]
 bitflags = "2.4.0"
+fnv = "1.0.7"
 logos = "0.13.0"
 string-interner = "0.14.0"

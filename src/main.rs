@@ -34,13 +34,29 @@ fn main() {
 
     let mut parser = Parser::new(&data);
     let res = parser.parse_file();
-    for (sym, name) in parser.lexer.extras.into_iter() {
-        println!("{:?} = {}", sym, name);
-    }
-    println!();
+    // for (sym, name) in parser.lexer.extras.into_iter() {
+    //     println!("{:?} = {}", sym, name);
+    // }
+    // println!();
     match res {
-        Ok(stmts)=>for stmt in stmts {
-            println!("{:#?}", stmt);
+        Ok(stmts)=>{
+            // for stmt in stmts {
+            //     println!("{:#?}", stmt);
+            // }
+            
+            let mut interpreter = tree_walk::Interpreter::new();
+
+            println!("Running code...");
+            let start = Instant::now();
+            let out = interpreter.interpret_program(&stmts);
+            let elapsed = start.elapsed();
+            match out {
+                Ok(d)=>{
+                    println!("Code output: {:?}", d);
+                    println!("Execution took {:?}", elapsed);
+                },
+                Err(e)=>e.print(&data),
+            }
         },
         Err(e)=>e.print(&data),
     }

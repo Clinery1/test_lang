@@ -1,20 +1,69 @@
 function fizzBuzz() {
-    var count = 100
+    var count = 1
 
-    while count > 0 {
-        let five = (count % 5) == 0
-        let three = (count % 3) == 0
+    while (copy count) < 100 {
+        let five = ((copy count) % 5) == 0
+        let three = ((copy count) % 3) == 0
 
-        if five and three {
-            print("FizzBuzz")
+        if (copy five) and (copy three) {
+            print "FizzBuzz\n"
         } else if three {
-            print("Fizz")
+            print "Fizz\n"
         } else if five {
-            print("Buzz")
+            print "Buzz\n"
         } else {
-            print(count)
+            print (copy count)
+            print "\n"
         }
 
-        set count = count - 1
+        set count = count + 1
     }
 }
+
+function sayHello(name) {
+    print "Hello "
+    print name
+    print "!\n"
+}
+
+function fib1(n) {
+    if (copy n) <= 0 {
+        return 0
+    } else if (copy n) == 1 {
+        return 1
+    } else {
+        return fib1((copy n) - 1) + fib1(n - 2);
+    }
+}
+
+function fib2(var n) {
+    if (copy n) <= 0 {
+        return 0
+    } else if (copy n) == 1 {
+        return 1
+    }
+
+    set n = n - 2
+
+    var num0 = 1
+    var num1 = 1
+
+    while (copy n) > 0 {
+        let tmp = num0 + (copy num1)
+        set num0 = num1
+        set num1 = tmp
+        set n = n - 1
+    }
+
+    return num1
+}
+
+
+sayHello("Chris")
+
+print fib1(15)
+print " ?= "
+print fib2(15)
+print "\n"
+
+fizzBuzz()

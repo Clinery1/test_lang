@@ -23,6 +23,7 @@ pub struct Parser<'a> {
     pub lexer: SpannedIter<'a, Token>,
     lookahead: [Option<Result<Token, ()>>;2],
     spans: [Span;3],
+    function_count: usize,
 }
 impl<'a> Parser<'a> {
     /// Create a new parser from a source string
@@ -32,6 +33,7 @@ impl<'a> Parser<'a> {
             lexer,
             lookahead: [None, None],
             spans: [0..0, 0..0, 0..0],
+            function_count: 0,
         };
         ret.next().ok();
         ret.next().ok();
@@ -186,6 +188,16 @@ impl<'a> Parser<'a> {
                 let end = self.span().end;
 
                 Ok(Stmt::DeleteVar(start..end, name))
+            },
+            Token::Keyword(Keyword::Print)=>{
+                self.next()?;
+                let start = self.span().start;
+
+                let data = self.parse_expr()?;
+
+                let end = self.span().end;
+
+                Ok(Stmt::Print(start..end, data))
             },
             _=>{
                 let start = self.peek_span().start;
@@ -449,7 +461,11 @@ impl<'a> Parser<'a> {
 
         let end = self.span().end;
 
+        let id = self.function_count;
+        self.function_count += 1;
+
         return Ok(Function {
+            id,
             span: start..end,
             name,
             params,
@@ -459,7 +475,23 @@ impl<'a> Parser<'a> {
 
     fn parse_function_param(&mut self)->Result<(Span, VarType, Symbol), Error> {
         let start = self.peek_span().start;
-        let var_type = self.parse_var_type()?;
+        let var_type = match self.peek()? {
+            Token::Keyword(Keyword::Mut)=>{
+                self.next()?;
+                match self.peek()? {
+                    Token::Keyword(Keyword::Var)=>{
+                        self.next()?;
+                        VarType::REASSIGN | VarType::MUTATE
+                    },
+                    _=>VarType::MUTATE,
+                }
+            },
+            Token::Keyword(Keyword::Var)=>{
+                self.next()?;
+                VarType::MUTATE
+            },
+            _=>VarType::empty(),
+        };
 
         let name = self.ident()?;
         let end = self.span().end;
@@ -749,7 +781,7 @@ impl<'a> Parser<'a> {
 
     /// parse an expression in parenthesis or a literal expression
     fn parse_paren_expr(&mut self)->Result<Expr, Error> {
-        match self.peek()? {
+        let left = match self.peek()? {
             Token::ParenStart=>{
                 // consume the parenthesis
                 self.next()?;
@@ -776,10 +808,12 @@ impl<'a> Parser<'a> {
                     _=>{},
                 }
 
-                return Ok(expr);
+                Ok(expr)
             },
-            _=>return self.parse_literal_expr(),
-        }
+            _=>self.parse_literal_expr(),
+        }?;
+
+        return self.parse_tail_expr(left);
     }
 
     /// parse a literal expression
@@ -792,7 +826,6 @@ impl<'a> Parser<'a> {
             Token::String(s)=>Ok(Expr::String(start, s)),
             Token::Keyword(Keyword::True)=>Ok(Expr::Bool(start, true)),
             Token::Keyword(Keyword::False)=>Ok(Expr::Bool(start, false)),
-            Token::Keyword(Keyword::This)=>Ok(Expr::This(start)),
             Token::SquareStart=>{
                 let start = self.span().start;
                 let mut items = Vec::new();

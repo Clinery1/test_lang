@@ -1,5 +1,12 @@
+use string_interner::DefaultSymbol as Symbol;
 use logos::Span;
-use crate::lexer::Token;
+use crate::{
+    ast::{
+        BinaryOp,
+        UnaryOp,
+    },
+    lexer::Token,
+};
 
 
 #[derive(Debug)]
@@ -14,6 +21,21 @@ pub enum ErrorType {
     UnexpectedToken,
     UnexpectedEOF,
     LineEnding,
+    VarExistsInScope,
+    VarDoesNotExist,
+    VarUndefined,
+    CannotReassign,
+    CannotMutate,
+    BinaryOperationNotSupported(BinaryOp),
+    UnaryOperationNotSupported(UnaryOp),
+    NoField(Symbol),
+    CannotCall,
+    CannotIndex,
+    ArrayOutOfBounds,
+    InvalidIndexType,
+    InvalidType,
+    InvalidFunctionArgs,
+    FunctionExists,
 }
 
 
@@ -39,6 +61,18 @@ impl Error {
     /// Create a new `UnexpectedEOF` error
     pub fn eof(span: Span)->Self {
         Self::new(span, ErrorType::UnexpectedEOF)
+    }
+
+    #[inline]
+    /// Create a new `BinaryOperationNotSupported` error
+    pub fn binary(span: Span, op: BinaryOp)->Self {
+        Self::new(span, ErrorType::BinaryOperationNotSupported(op))
+    }
+
+    #[inline]
+    /// Create a new `UnaryOperationNotSupported` error
+    pub fn unary(span: Span, op: UnaryOp)->Self {
+        Self::new(span, ErrorType::UnaryOperationNotSupported(op))
     }
 
     #[inline]

@@ -23,7 +23,6 @@ pub enum Token {
     #[token("let", |_|Keyword::Let)]
     #[token("const", |_|Keyword::Const)]
     #[token("class", |_|Keyword::Class)]
-    #[token("this", |_|Keyword::This)]
     #[token("super", |_|Keyword::Super)]
     #[token("mut", |_|Keyword::Mut)]
     #[token("set", |_|Keyword::Set)]
@@ -40,6 +39,7 @@ pub enum Token {
     #[token("return", |_|Keyword::Return)]
     #[token("break", |_|Keyword::Break)]
     #[token("continue", |_|Keyword::Continue)]
+    #[token("print", |_|Keyword::Print)]
     Keyword(Keyword),
     #[token("(")]
     ParenStart,
@@ -92,7 +92,7 @@ pub enum Token {
     #[regex("\n[ \t\r\n]*")]
     Newline,
     #[token("\"", parse_string)]
-    String(Symbol),
+    String(String),
 }
 
 #[derive(Debug, PartialEq)]
@@ -102,7 +102,6 @@ pub enum Keyword {
     Let,
     Const,
     Class,
-    This,
     Super,
     Mut,
     Set,
@@ -119,24 +118,38 @@ pub enum Keyword {
     Return,
     Break,
     Continue,
+    Print,
 }
 
 
-fn parse_string<'a>(lex: &mut Lexer<'a, Token>)->Option<Symbol> {
+fn parse_string<'a>(lex: &mut Lexer<'a, Token>)->Option<String> {
     let mut escape = false;
     let mut finished = false;
+    let mut out = String::new();
 
+    // TODO: more escape sequences
     for c in lex.remainder().chars() {
         if !escape {    // if we are not in an escape
-            if c == '"' {   // break the loop on double quote
-                finished = true;
-                break;
+            match c {
+                '"'=>{  // break the loop on double quote
+                    finished = true;
+                    break;
+                },
+                // set escape if the current character is a backslash
+                '\\'=>escape = true,
+                _=>out.push(c),
             }
-            // set escape if the current character is a backslash
-            escape = c == '\\';
         } else {
             // reset escape if it is on
             escape = false;
+            match c {
+                '"'=>out.push('"'),
+                'n'=>out.push('\n'),
+                'r'=>out.push('\r'),
+                't'=>out.push('\t'),
+                '\\'=>out.push('\\'),
+                _=>{},  // ignore invalid escapes
+            }
         }
 
         // bump the lexer by how many bytes c takes up
@@ -147,13 +160,11 @@ fn parse_string<'a>(lex: &mut Lexer<'a, Token>)->Option<Symbol> {
         return None;
     }
 
-    // slice the string to remove the leading quote
-    let string = &lex.slice()[1..];
     // bump the lexer past the trailing quote
     lex.bump(1);
 
     // intern the string, because using `Symbol` is easier than `&'a str` and faster than `String`
-    return Some(lex.extras.get_or_intern(string));
+    return Some(out);
 }
 
 // intern the string slice of the current token and return the symbol

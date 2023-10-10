@@ -21,7 +21,6 @@ pub enum Stmt {
         name: Symbol,
         // TODO: types
         fields: Vec<(VarType, Symbol)>,
-
         methods: Vec<Function>,
     },
     CreateConst {
@@ -54,6 +53,7 @@ pub enum Stmt {
     Return(Span, Option<Expr>),
     Continue(Span),
     Break(Span),
+    Print(Span, Expr),
 }
 impl GetSpan for Stmt {
     fn span(&self)->Span {
@@ -70,7 +70,8 @@ impl GetSpan for Stmt {
                 Expression(span, _)|
                 Return(span, _)|
                 Continue(span)|
-                Break(span)=>span.clone(),
+                Break(span)|
+                Print(span, _)=>span.clone(),
         }
     }
 }
@@ -83,7 +84,7 @@ pub enum Expr {
     UnaryOp(Span, UnaryOp, Box<Self>),
     Integer(Span, i64),
     Float(Span, f64),
-    String(Span, Symbol),
+    String(Span, String),
     Named(Span, Symbol),
     Field(Span, Box<Self>, Symbol),
     // the first item is the thing we call, or the function/method name, etc.
@@ -92,7 +93,6 @@ pub enum Expr {
     Ref(Span, VarType, Symbol),
     List(Span, Vec<Self>),
     Index(Span, Box<[Self;2]>),
-    This(Span),
 }
 impl GetSpan for Expr {
     fn span(&self)->Span {
@@ -110,8 +110,7 @@ impl GetSpan for Expr {
                 Bool(span,..)|
                 Ref(span,..)|
                 List(span,..)|
-                Index(span,..)|
-                This(span,..)=>span.clone(),
+                Index(span,..)=>span.clone(),
         }
     }
 }
@@ -119,7 +118,7 @@ impl Expr {
     fn is_literal(&self)->bool {
         use Expr::*;
         match self {
-            Named(..)|String(..)|Float(..)|Integer(..)|Bool(..)|List(..)|This(..)=>true,
+            Named(..)|String(..)|Float(..)|Integer(..)|Bool(..)|List(..)=>true,
             _=>false,
         }
     }
@@ -145,7 +144,6 @@ impl Display for Expr {
             Float(_, i)=>write!(f,"{}", i)?,
             Bool(_, b)=>write!(f,"{}", b)?,
             Ref(_, var_type, sym)=>write!(f,"ref {} <{:?}>", var_type, sym)?,
-            This(_)=>write!(f,"this")?,
             List(_, items)=>{
                 write!(f,"[")?;
                 if items.len()>0 {
@@ -230,7 +228,7 @@ impl Display for Expr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -266,7 +264,7 @@ impl Display for BinaryOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum UnaryOp {
     Negate,
     Not,
@@ -282,7 +280,7 @@ impl Display for UnaryOp {
 
 
 bitflags::bitflags! {
-    #[derive(Debug)]
+    #[derive(Debug, Copy, Clone)]
     pub struct VarType: u32 {
         /// Allows assigning a new value of the same type to the container.
         /// example: `set x = 5`
@@ -309,6 +307,7 @@ impl Display for VarType {
 
 #[derive(Debug)]
 pub struct Function {
+    pub id: usize,
     pub span: Span,
     pub name: Symbol,
     // TODO: types
