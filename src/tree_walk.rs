@@ -660,6 +660,12 @@ impl ScopeStack {
             if let Some(data) = last.data.take() {
                 // mark the var as taken so we can clean it up later, if needed
                 last.taken = true;
+
+                // if the var has no reassign privilege, then fully remove it.
+                if !last.var_type.contains(VarType::REASSIGN) {
+                    self.remove_taken(sym);
+                }
+
                 return Ok(data);
             } else {
                 return Err(Error::new(span, ErrorType::VarUndefined));
