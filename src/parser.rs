@@ -488,7 +488,7 @@ impl<'a> Parser<'a> {
             },
             Token::Keyword(Keyword::Var)=>{
                 self.next()?;
-                VarType::MUTATE
+                VarType::REASSIGN
             },
             _=>VarType::empty(),
         };
