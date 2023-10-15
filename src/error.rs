@@ -1,5 +1,10 @@
 use string_interner::DefaultSymbol as Symbol;
 use logos::Span;
+use std::fmt::{
+    Display,
+    Formatter,
+    Result as FmtResult,
+};
 use crate::{
     ast::{
         BinaryOp,
@@ -34,11 +39,44 @@ pub enum ErrorType {
     ArrayOutOfBounds,
     InvalidIndexType,
     InvalidType,
-    InvalidFunctionArgs,
+    InvalidFunctionArgs(usize, usize),
     FunctionExists,
     TooManyParams,
     TooManyArgs,
     TypeHasNoFields,
+}
+impl Display for ErrorType {
+    fn fmt(&self, f: &mut Formatter)->FmtResult {
+        use ErrorType::*;
+        match self {
+            ExpectedToken(token)=>write!(f,"Expected the token `{:?}`", token),
+            ExpectedIdent=>write!(f,"Expected an identifier"),
+            UnclosedParen=>write!(f,"Unclosed parenthesis"),
+            UnclosedCurly=>write!(f,"Unclosed curly bracket"),
+            UnclosedSquare=>write!(f,"Unclosed square bracket"),
+            UnexpectedToken=>write!(f,"Unexpected token"),
+            UnexpectedEOF=>write!(f,"Unexpected end of file"),
+            LineEnding=>write!(f,"Expected a semicolon or newline"),
+            VarExistsInScope=>write!(f,"Variable already exists in this scope"),
+            VarDoesNotExist=>write!(f,"Variable does not exist"),
+            VarUndefined=>write!(f,"Variable is undefined"),
+            CannotReassign=>write!(f,"Cannot reassign to this"),
+            CannotMutate=>write!(f,"Cannot mutate this"),
+            BinaryOperationNotSupported(op)=>write!(f,"Binary operation ({}) is not supported on these types", op),
+            UnaryOperationNotSupported(op)=>write!(f,"Unary operation ({}) is not supported on this type", op),
+            NoField(sym)=>write!(f,"There is no field named <{:?}> on this object", sym),
+            CannotCall=>write!(f,"Cannot call this data type"),
+            CannotIndex=>write!(f,"Cannot index this data type"),
+            ArrayOutOfBounds=>write!(f,"Array index out of bounds"),
+            InvalidIndexType=>write!(f,"Cannot index a value with this type"),
+            InvalidType=>write!(f,"Invalid type"),
+            InvalidFunctionArgs(expect, got)=>write!(f,"Invalid number of function arguments. Expected {}, but got {}", expect, got),
+            FunctionExists=>write!(f,"Function already exists"),
+            TooManyParams=>write!(f,"Too many parameters for a function. The maximum is 255."),
+            TooManyArgs=>write!(f,"Too many arguments for a function. The maximum is 255."),
+            TypeHasNoFields=>write!(f,"Type has no fields"),
+        }
+    }
 }
 
 
@@ -162,7 +200,7 @@ impl Error {
             }
 
             // print the error message on another line
-            eprintln!("{:number_width$}   {:start_offset$} {:?}", " ", "", self.err_type);
+            eprintln!("{:number_width$}   {:start_offset$} {}", " ", "", self.err_type);
         } else {    // multi line error
             // get the length of the longest line number (the ending line number)
             let line_num_max = end_line.to_string().len().max(3);
@@ -175,7 +213,7 @@ impl Error {
             eprint!("{:>line_num_max$} │ {}", start_line,line0);
 
             // print where the error happens and the error message
-            eprintln!("{:>line_num_max$} ├─{0:─>start_offset$}╯ {:?}", "", self.err_type);
+            eprintln!("{:>line_num_max$} ├─{0:─>start_offset$}╯ {}", "", self.err_type);
 
             if line_delta > 1 {
                 // if there are more than 2 lines, then print a `...` showing there are hidden
