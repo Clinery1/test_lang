@@ -1,18 +1,18 @@
 function fizzBuzz() {
     var count = 1
 
-    while (copy count) < 100 {
-        let five = ((copy count) % 5) == 0
-        let three = ((copy count) % 3) == 0
+    while count < 100 {
+        let five = (count % 5) == 0
+        let three = (count % 3) == 0
 
-        if (copy five) and (copy three) {
+        if five and three {
             print "FizzBuzz\n"
         } else if three {
             print "Fizz\n"
         } else if five {
             print "Buzz\n"
         } else {
-            print (copy count)
+            print count
             print "\n"
         }
 

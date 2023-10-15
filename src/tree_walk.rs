@@ -29,6 +29,14 @@ pub enum Data {
     None,
 }
 impl Data {
+    // TODO: classes
+    pub fn is_copy(&self)->bool {
+        use Data::*;
+        match self {
+            Bool(_)|Integer(_)|Float(_)|FunctionPtr(_)|None=>true,
+            _=>false,
+        }
+    }
     pub fn get_mut_mutate(&mut self, span: Span, sym: Symbol)->Result<&mut Self, Error> {
         match self {
             Self::Object(inner)|Self::Class(Class{inner,..})=>{
@@ -184,7 +192,7 @@ impl<'a> Interpreter<'a> {
                 Stmt::Function(_, func)=>{
                     let id = self.register_function(func)?;
                     if funcs.contains_key(&func.name) {
-                        return Err(Error::new(func.span.clone(), ErrorType::FunctionExists));
+                        return Err(Error::new(func.span.start..func.span.start, ErrorType::FunctionExists));
                     }
                     funcs.insert(func.name, id);
                 },
@@ -558,7 +566,7 @@ impl<'a> Interpreter<'a> {
 
         // check if there are the correct amount of args
         if args.len() != func.params.len() {
-            return Err(Error::new(span, ErrorType::InvalidFunctionArgs));
+            return Err(Error::new(span, ErrorType::InvalidFunctionArgs(func.params.len(), args.len())));
         }
 
         // get a ref to the scope
@@ -690,6 +698,11 @@ impl ScopeStack {
             }
 
             if let Some(data) = last.data.take() {
+                // return early if the data can be copied
+                if data.is_copy() {
+                    return Ok(data.clone());
+                }
+
                 // mark the var as taken so we can clean it up later, if needed
                 last.taken = Some(span.clone());
                 last.last_modified_at = span;
