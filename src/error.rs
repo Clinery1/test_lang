@@ -1,9 +1,12 @@
 use string_interner::DefaultSymbol as Symbol;
 use logos::Span;
-use std::fmt::{
-    Display,
-    Formatter,
-    Result as FmtResult,
+use std::{
+    fmt::{
+        Display,
+        Formatter,
+        Result as FmtResult,
+    },
+    ops::RangeInclusive,
 };
 use crate::{
     ast::{
@@ -14,9 +17,9 @@ use crate::{
 };
 
 
-#[derive(Debug)]
 /// A simple error type enum. Will probably have to write a `Display` impl for it later, but
 /// `Debug` is enough for now.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ErrorType {
     ExpectedToken(Token),
     ExpectedIdent,
@@ -40,11 +43,53 @@ pub enum ErrorType {
     InvalidIndexType,
     InvalidType,
     InvalidFunctionArgs(usize, usize),
-    FunctionExists,
+    FunctionRedefined,
     TooManyParams,
     TooManyArgs,
     TypeHasNoFields,
     FieldExists,
+    MethodRedefined,
+    AssociatedMethodRedefined,
+    UndefinedClass,
+    ClassHasNoAssociated,
+}
+impl ErrorType {
+    pub fn err_num(&self)->u16 {
+        use ErrorType::*;
+        match self {
+            ExpectedToken(..)=>0,
+            ExpectedIdent=>1,
+            UnclosedParen=>2,
+            UnclosedCurly=>3,
+            UnclosedSquare=>4,
+            UnexpectedToken=>5,
+            UnexpectedEOF=>6,
+            LineEnding=>7,
+            VarExistsInScope=>7,
+            VarDoesNotExist=>8,
+            VarUndefined=>9,
+            CannotReassign=>10,
+            CannotMutate=>11,
+            BinaryOperationNotSupported(..)=>12,
+            UnaryOperationNotSupported(..)=>13,
+            NoField(..)=>14,
+            CannotCall=>15,
+            CannotIndex=>16,
+            ArrayOutOfBounds=>17,
+            InvalidIndexType=>18,
+            InvalidType=>19,
+            InvalidFunctionArgs(..)=>20,
+            FunctionRedefined=>21,
+            TooManyParams=>22,
+            TooManyArgs=>23,
+            TypeHasNoFields=>24,
+            FieldExists=>25,
+            MethodRedefined=>26,
+            AssociatedMethodRedefined=>27,
+            UndefinedClass=>28,
+            ClassHasNoAssociated=>29,
+        }
+    }
 }
 impl Display for ErrorType {
     fn fmt(&self, f: &mut Formatter)->FmtResult {
@@ -58,7 +103,7 @@ impl Display for ErrorType {
             UnexpectedToken=>write!(f,"Unexpected token"),
             UnexpectedEOF=>write!(f,"Unexpected end of file"),
             LineEnding=>write!(f,"Expected a semicolon or newline"),
-            VarExistsInScope=>write!(f,"Variable already exists in this scope"),
+            VarExistsInScope=>write!(f,"Variable redefined here in this scope"),
             VarDoesNotExist=>write!(f,"Variable does not exist"),
             VarUndefined=>write!(f,"Variable is undefined"),
             CannotReassign=>write!(f,"Cannot reassign to this"),
@@ -72,31 +117,49 @@ impl Display for ErrorType {
             InvalidIndexType=>write!(f,"Cannot index a value with this type"),
             InvalidType=>write!(f,"Invalid type"),
             InvalidFunctionArgs(expect, got)=>write!(f,"Invalid number of function arguments. Expected {}, but got {}", expect, got),
-            FunctionExists=>write!(f,"Function already exists"),
+            FunctionRedefined=>write!(f,"Function redefined here"),
             TooManyParams=>write!(f,"Too many parameters for a function. The maximum is 255."),
             TooManyArgs=>write!(f,"Too many arguments for a function. The maximum is 255."),
             TypeHasNoFields=>write!(f,"Type has no fields"),
             FieldExists=>write!(f,"Field already exists"),
+            MethodRedefined=>write!(f,"Class method redefined here"),
+            AssociatedMethodRedefined=>write!(f,"Associated class function redefined here"),
+            UndefinedClass=>write!(f,"Class is not defined"),
+            ClassHasNoAssociated=>write!(f,"The class has no associated function"),
         }
     }
 }
 
-
-#[derive(Debug)]
 /// A simple error type that should handle my needs for the foreseeable future
-pub struct Error {
-    pub err_type: ErrorType,
-    start: usize,
-    end: usize,
+#[derive(Debug, Clone)]
+pub enum Error {
+    Standard {
+        err_type: ErrorType,
+        span: Span,
+    },
+    TwoLocation {
+        err_type: ErrorType,
+        first_msg: &'static str,
+        first: Span,
+        second: Span,
+    },
 }
 impl Error {
     #[inline]
     /// Create a new error
     pub fn new(span: Span, err_type: ErrorType)->Self {
-        Error {
+        Error::Standard {
             err_type,
-            start: span.start,
-            end: span.end,
+            span,
+        }
+    }
+
+    pub fn two_location(first: Span, second: Span, first_msg: &'static str, err_type: ErrorType)->Self {
+        Error::TwoLocation {
+            err_type,
+            first_msg,
+            first,
+            second,
         }
     }
 
@@ -130,12 +193,135 @@ impl Error {
         Self::new(span, ErrorType::ExpectedIdent)
     }
 
+    /// Get a reference to the error type
+    pub fn err_type(&self)->&ErrorType {
+        match self {
+            Self::Standard{err_type,..}|
+                Self::TwoLocation{err_type,..}=>err_type,
+        }
+    }
+
+    fn print_source(source: &str, metrics: SourceMetrics, line_num_width: Option<usize>, err_msg: impl Display) {
+        let line_delta = metrics.end.num - metrics.start.num;
+        let start_offset = metrics.start.offset;
+        let end_offset = metrics.end.offset;
+
+        if line_delta == 0 {    // single line error
+            // get the source code for the line
+            let line = &source[metrics.start.range];
+
+            // convert the line number to a string so we can measure its length
+            let line_num = (metrics.start.num + 1).to_string();
+            let number_width = line_num_width.unwrap_or(line_num.len()).max(3);
+
+            // print a newline if the line doesn't have one
+            if line.ends_with('\n') {
+                eprint!("{:>number_width$} │ {}", line_num, line);
+            } else {
+                eprintln!("{:>number_width$} │ {}", line_num, line);
+            }
+
+            // find the difference between the start and end points. subtract one because it
+            // otherwise looks weird
+            let start_end_delta = (end_offset - start_offset).saturating_sub(1);
+
+            if start_end_delta > 1 {
+                // if the difference is more than 1 character, then line characters showing the start
+                // and end
+                eprintln!("{:>number_width$}   {:start_offset$}╰{:─>start_end_delta$}", " ", "", "╯");
+            } else {
+                // otherwise, just print a carat to show the error location
+                eprintln!("{:>number_width$}   {:start_offset$}^", " ", "");
+            }
+
+            // print the error message on another line
+            eprintln!("{:number_width$}   {:start_offset$} {}", " ", "", err_msg);
+        } else {    // multi line error
+            // get the length of the longest line number (the ending line number)
+            let line_num = (metrics.end.num + 1).to_string();
+            let line_num_max = line_num_width.unwrap_or(line_num.len()).max(3);
+
+            // slice the source code lines
+            let line0 = &source[metrics.start.range];
+            let line1 = &source[metrics.end.range];
+
+            // print the start line and line number
+            eprint!("{:>line_num_max$} │ {}", metrics.start.num + 1,line0);
+
+            // print where the error happens and the error message
+            eprintln!("{:>line_num_max$} ├─{0:─>start_offset$}╯ {}", "", err_msg);
+
+            if line_delta > 1 {
+                // if there are more than 2 lines, then print a `...` showing there are hidden
+                // lines
+                eprintln!("...");
+            } else {
+                // otherwise just print a blank line with no number for spacing
+                eprintln!("{:>line_num_max$} │", "");
+            }
+
+            // print the second line and a newline if it doesn't have one
+            if line1.ends_with('\n') {
+                eprint!("{:>line_num_max$} │ {}", metrics.end.num + 1, line1);
+            } else {
+                eprintln!("{:>line_num_max$} │ {}", metrics.end.num + 1, line1);
+            }
+
+            // print the line characters pointing to where the error ends
+            eprintln!("{:>line_num_max$} ╰─{:─>end_offset$}", "", "╯");
+        }
+    }
+
     /// Print the error to STDERR
     pub fn print(&self, source: &str) {
-        // check to make sure this error fits within the source string (sanity check)
-        if self.end > source.len() {
-            return;
+        match self {
+            Self::Standard{err_type,span}=>{
+                // check to make sure this error fits within the source string (sanity check)
+                if span.end > source.len() {
+                    println!("Invalid source");
+                    return;
+                }
+
+                let metrics = SourceMetrics::new(source, span.clone());
+
+                println!("Error[E{}]:", err_type.err_num());
+                Self::print_source(source, metrics, None, err_type);
+            },
+            Self::TwoLocation{err_type,first_msg,first,second}=>{
+                if first.end > source.len() || second.end > source.len() {
+                    println!("Invalid source");
+                    return;
+                }
+
+                let first_metrics = SourceMetrics::new(source, first.clone());
+                let second_metrics = SourceMetrics::new(source, second.clone());
+
+                let first_width = (first_metrics.end.num + 1).to_string().len();
+                let second_width = (second_metrics.end.num + 1).to_string().len();
+
+                let width = first_width.max(second_width).max(3);
+
+                println!("Error[E{}]:", err_type.err_num());
+                Self::print_source(source, first_metrics, Some(width), first_msg);
+                println!();
+                Self::print_source(source, second_metrics, Some(width), err_type);
+            },
         }
+    }
+}
+
+
+#[derive(Default)]
+struct SourceMetrics {
+    pub start: Line,
+    pub end: Line,
+}
+impl SourceMetrics {
+    pub fn new(source: &str, span: Span)->Self {
+        let start = span.start;
+        let end = span.end;
+
+        let mut metrics = SourceMetrics::default();
 
         // create a list of inclusive ranges for each line
         let mut lines = Vec::new();
@@ -150,91 +336,39 @@ impl Error {
         lines.push(line_start..=source.len());
 
         // find which line start and end are contained in
-        let mut start_line = usize::MAX;
-        let mut end_line = usize::MAX;
         for (i, line) in lines.iter().enumerate() {
-            if line.contains(&self.start) {
-                start_line = i;
+            if line.contains(&start) {
+                metrics.start = Line {
+                    range: line.clone(),
+                    num: i,
+                    offset: start - line.start(),
+                };
             }
-            if line.contains(&(self.end - 1)) {
-                end_line = i;
+            if line.contains(&(end - 1)) {
+                metrics.end = Line {
+                    range: line.clone(),
+                    num: i,
+                    offset: end - line.start(),
+                };
                 break;
             }
         }
 
-        // assert that start and end have a line number (assumption: there are fewer than
-        // usize::MAX lines)
-        debug_assert_ne!(start_line, usize::MAX);
-        debug_assert_ne!(end_line, usize::MAX);
+        return metrics;
+    }
+}
 
-        // find how many lines this error encompasses and the offsets from the start of the line
-        // for self.{start,end}
-        let line_delta = end_line - start_line;
-        let start_offset = self.start - lines[start_line].start();
-        let end_offset = self.end - lines[end_line].start();
-
-        if line_delta == 0 {    // single line error
-            // get the source code for the line
-            let line = &source[lines[start_line].clone()];
-
-            // convert the line number to a string so we can measure its length
-            let line_num = (start_line + 1).to_string();
-            let number_width = line_num.len();
-
-            // print a newline if the line doesn't have one
-            if line.ends_with('\n') {
-                eprint!("{} │ {}", line_num, line);
-            } else {
-                eprintln!("{} │ {}", line_num, line);
-            }
-
-            // find the difference between the start and end points. subtract one because it
-            // otherwise looks weird
-            let start_end_delta = (self.end - self.start).saturating_sub(1);
-
-            if start_end_delta > 1 {
-                // if the difference is more than 1 character, then line characters showing the start
-                // and end
-                eprintln!("{:number_width$}   {:start_offset$}╰{:─>start_end_delta$}", " ", "", "╯");
-            } else {
-                // otherwise, just print a carat to show the error location
-                eprintln!("{:number_width$}   {:start_offset$}^", " ", "");
-            }
-
-            // print the error message on another line
-            eprintln!("{:number_width$}   {:start_offset$} {}", " ", "", self.err_type);
-        } else {    // multi line error
-            // get the length of the longest line number (the ending line number)
-            let line_num_max = end_line.to_string().len().max(3);
-
-            // slice the source code lines
-            let line0 = &source[lines[start_line].clone()];
-            let line1 = &source[lines[end_line].clone()];
-
-            // print the start line and line number
-            eprint!("{:>line_num_max$} │ {}", start_line,line0);
-
-            // print where the error happens and the error message
-            eprintln!("{:>line_num_max$} ├─{0:─>start_offset$}╯ {}", "", self.err_type);
-
-            if line_delta > 1 {
-                // if there are more than 2 lines, then print a `...` showing there are hidden
-                // lines
-                eprintln!("...");
-            } else {
-                // otherwise just print a blank line with no number for spacing
-                eprintln!("{:>line_num_max$} │", "");
-            }
-
-            // print the second line and a newline if it doesn't have one
-            if line1.ends_with('\n') {
-                eprint!("{:>line_num_max$} │ {}", end_line, line1);
-            } else {
-                eprintln!("{:>line_num_max$} │ {}", end_line, line1);
-            }
-
-            // print the line characters pointing to where the error ends
-            eprintln!("{:>line_num_max$} ╰─{:─>end_offset$}", "", "╯");
+struct Line {
+    pub range: RangeInclusive<usize>,
+    pub num: usize,
+    pub offset: usize,
+}
+impl Default for Line {
+    fn default()->Self {
+        Line {
+            range: 0..=0,
+            num: 0,
+            offset: 0,
         }
     }
 }
