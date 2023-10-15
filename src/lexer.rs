@@ -8,7 +8,7 @@ use string_interner::{
 };
 
 
-#[derive(Logos, Debug, PartialEq)]
+#[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(extras = StringInterner)]
 #[logos(skip "[ \t\r]")]
 pub enum Token {
@@ -40,10 +40,6 @@ pub enum Token {
     #[token("break", |_|Keyword::Break)]
     #[token("continue", |_|Keyword::Continue)]
     #[token("print", |_|Keyword::Print)]
-    #[token("interface", |_|Keyword::Interface)]
-    #[token("enum", |_|Keyword::Enum)]
-    #[token("implement", |_|Keyword::Implement)]
-    #[token("for", |_|Keyword::For)]
     #[token("pub", |_|Keyword::Public)]
     Keyword(Keyword),
     #[token("(")]
@@ -98,9 +94,11 @@ pub enum Token {
     Newline,
     #[token("\"", parse_string)]
     String(String),
+    #[token("::")]
+    ColonColon,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Keyword {
     Function,
     Var,
@@ -124,10 +122,6 @@ pub enum Keyword {
     Break,
     Continue,
     Print,
-    Interface,
-    Enum,
-    Implement,
-    For,
     Public,
 }
 

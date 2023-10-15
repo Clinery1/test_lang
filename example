@@ -82,3 +82,5 @@ print (copy myObject).x
 print "\n"
 
 set myObject.x = 0
+
+let fizzBuzz = 0

@@ -22,10 +22,10 @@ pub enum Data {
     Float(f64),
     String(String),
     FunctionPtr(FunctionId),
-    Class(Class),
+    Class(ClassId, Object),
     List(Vec<Self>),
     Object(Object),
-    // TakeVar(Span, Symbol),
+    RefPath(Vec<(Span, Symbol)>),
     None,
 }
 impl Data {
@@ -37,17 +37,31 @@ impl Data {
             _=>false,
         }
     }
+    pub fn deref(self, interpreter: &mut Interpreter)->Result<Self, Error> {
+        match self {
+            Self::RefPath(path)=>{
+                assert!(path.len() > 0);
+
+                let mut data = interpreter.scope().take_var(path[0].0.clone(), path[0].1)?;
+
+                for (span,name) in path.into_iter().skip(1) {
+                    data = data.take_field(span, name)?;
+                }
+
+                return Ok(data);
+            },
+            d=>Ok(d),
+        }
+    }
     pub fn get_mut_mutate(&mut self, span: Span, sym: Symbol)->Result<&mut Self, Error> {
         match self {
-            Self::Object(inner)|Self::Class(Class{inner,..})=>{
-                if let Some((var_type, field_mut)) = inner.get_mut(&sym) {
-                    if var_type.contains(Permissions::MUTATE) {
-                        return Ok(field_mut);
-                    } else {
-                        return Err(Error::new(span, ErrorType::CannotMutate));
-                    }
+            Self::Object(inner)|Self::Class(_, inner)=>{
+                let entry = inner.entry(sym)
+                    .or_insert((Permissions::all(), Data::None));
+                if entry.0.contains(Permissions::MUTATE) {
+                    return Ok(&mut entry.1);
                 } else {
-                    return Err(Error::new(span, ErrorType::NoField(sym)));
+                    return Err(Error::new(span, ErrorType::CannotMutate));
                 }
             },
             _=>return Err(Error::new(span, ErrorType::TypeHasNoFields)),
@@ -56,18 +70,34 @@ impl Data {
 
     pub fn get_mut_reassign(&mut self, span: Span, sym: Symbol)->Result<&mut Self, Error> {
         match self {
-            Self::Object(inner)|Self::Class(Class{inner,..})=>{
-                if let Some((var_type, field_mut)) = inner.get_mut(&sym) {
-                    if var_type.contains(Permissions::REASSIGN) {
-                        return Ok(field_mut);
-                    } else {
-                        return Err(Error::new(span, ErrorType::CannotReassign));
-                    }
+            Self::Object(inner)|Self::Class(_, inner)=>{
+                let entry = inner.entry(sym)
+                    .or_insert((Permissions::all(), Data::None));
+                if entry.0.contains(Permissions::REASSIGN) {
+                    return Ok(&mut entry.1);
                 } else {
-                    return Err(Error::new(span, ErrorType::NoField(sym)));
+                    return Err(Error::new(span, ErrorType::CannotMutate));
                 }
             },
             _=>return Err(Error::new(span, ErrorType::TypeHasNoFields)),
+        }
+    }
+
+    pub fn take_field(self, span: Span, sym: Symbol)->Result<Self, Error> {
+        match self {
+            Self::Object(mut inner)|Self::Class(_, mut inner)=>{
+                if let Some(data) = inner.remove(&sym) {
+                    return Ok(data.1);
+                }
+
+                Err(Error::new(span, ErrorType::NoField(sym)))
+            },
+            Self::RefPath(mut path)=>{
+                path.push((span, sym));
+
+                Ok(Data::RefPath(path))
+            },
+            _=>Err(Error::new(span, ErrorType::TypeHasNoFields)),
         }
     }
 
@@ -87,8 +117,14 @@ pub enum OutputData {
 
 
 pub struct Interpreter<'a> {
+    /// a sparse list of functions
     functions: FnvHashMap<FunctionId, RTFunction<'a>>,
+    /// a sparse list of classes
+    classes: FnvHashMap<ClassId, RTClass<'a>>,
+    /// the functions defined at a global level
     global_functions: Vec<(Symbol, FunctionId)>,
+    /// the classes defined at a global level
+    global_classes: Vec<(Symbol, ClassId)>,
     /// stores all scopes. When a function is called, we push a new scope stack with the function's
     /// params and things here
     scope_stack: Vec<ScopeStack>,
@@ -97,7 +133,9 @@ impl<'a> Interpreter<'a> {
     pub fn new()->Self {
         Interpreter {
             functions: FnvHashMap::default(),
+            classes: FnvHashMap::default(),
             global_functions: Vec::new(),
+            global_classes: Vec::new(),
             scope_stack: vec![ScopeStack::new()],
         }
     }
@@ -147,7 +185,7 @@ impl<'a> Interpreter<'a> {
     }
 
     pub fn interpret_program(&mut self, stmts: &'a [Stmt])->Result<OutputData, Error> {
-        let functions = self.register_functions(stmts)?;
+        let (functions, classes) = self.register_functions(stmts)?;
         for (sym, id) in functions {
             let func = self.functions.get(&id).unwrap();
             let span = func.created_at.clone();
@@ -161,6 +199,11 @@ impl<'a> Interpreter<'a> {
                 data: Some(Data::FunctionPtr(id)),
             })?;
         }
+
+        self.global_classes.extend(classes.iter().map(|(k,v)|(*k,*v)));
+
+        // set the defined class list
+        self.scope().scopes.last_mut().unwrap().classes = classes;
 
         for stmt in stmts {
             match self.interpret_stmt(stmt)? {
@@ -183,24 +226,42 @@ impl<'a> Interpreter<'a> {
         return Ok(OutputData::None);
     }
 
-    pub fn register_functions(&mut self, stmts: &'a [Stmt])->Result<FnvHashMap<Symbol, FunctionId>, Error> {
-        let mut funcs = FnvHashMap::default();
+    pub fn register_functions(&mut self, stmts: &'a [Stmt])->Result<(FnvHashMap<Symbol, FunctionId>, FnvHashMap<Symbol, ClassId>), Error> {
+        let mut funcs: FnvHashMap<Symbol, FunctionId> = FnvHashMap::default();
+        let mut classes: FnvHashMap<Symbol, ClassId> = FnvHashMap::default();
 
         for stmt in stmts {
             // TODO: properly handle functions in ifs, whiles, etc.
             match stmt {
                 Stmt::Function(_, func)=>{
                     let id = self.register_function(func)?;
-                    if funcs.contains_key(&func.name) {
-                        return Err(Error::new(func.span.start..func.span.start, ErrorType::FunctionExists));
+                    if let Some(prev_id) = funcs.get(&func.name) {
+                        let prev_func = self.functions.get(prev_id).unwrap();
+                        let first_span = prev_func.created_at.clone();
+                        let second_span = func.span.clone();
+
+                        let first_msg = "Function previously defined here";
+
+                        return Err(Error::two_location(
+                            first_span,
+                            second_span,
+                            first_msg,
+                            ErrorType::FunctionRedefined,
+                        ));
                     }
                     funcs.insert(func.name, id);
                 },
+                Stmt::Class{name,..}=>{
+                    let name = *name;
+                    let id = self.register_class(stmt)?;
+                    classes.insert(name, id);
+                },
+                // TODO: recursively define classes and functions
                 _=>{},
             }
         }
 
-        return Ok(funcs);
+        return Ok((funcs, classes));
     }
 
     pub fn register_function(&mut self, func: &'a Function)->Result<FunctionId, Error> {
@@ -208,15 +269,72 @@ impl<'a> Interpreter<'a> {
 
         let body = &func.body.body;
         let params = &func.params;
-        let inner_functions = self.register_functions(body)?;
+        let (inner_functions, inner_classes) = self.register_functions(body)?;
 
+        // IDs are unique
         self.functions.insert(id, RTFunction {
             name: func.name,
             created_at: func.span.clone(),
             inner_functions,
+            inner_classes,
             params,
             body,
         });
+
+        return Ok(id);
+    }
+
+    pub fn register_class(&mut self, class: &'a Stmt)->Result<ClassId, Error> {
+        let Stmt::Class{span,id,permissions,name,fields,methods,associated} = class else {
+            panic!("Not a class");
+        };
+
+        let id = ClassId(*id);
+        let mut rt_class = RTClass {
+            name: *name,
+            permissions: *permissions,
+            fields: &fields,
+            created_at: span.clone(),
+            methods: FnvHashMap::default(),
+            associated: FnvHashMap::default(),
+        };
+
+        for method in methods {
+            if let Some(prev_id) = rt_class.methods.get(&method.name) {
+                let prev_method = self.functions.get(prev_id).unwrap();
+
+                return Err(Error::two_location(
+                    prev_method.created_at.clone(),
+                    method.span(),
+                    "Method previously defined here",
+                    ErrorType::MethodRedefined,
+                ));
+            }
+            let name = method.name;
+            let id = self.register_function(&method)?;
+
+            rt_class.methods.insert(name, id);
+        }
+
+        for associated in associated {
+            if let Some(prev_id) = rt_class.associated.get(&associated.name) {
+                let prev_associated = self.functions.get(prev_id).unwrap();
+
+                return Err(Error::two_location(
+                    prev_associated.created_at.clone(),
+                    associated.span(),
+                    "Method previously defined here",
+                    ErrorType::MethodRedefined,
+                ));
+            }
+            let name = associated.name;
+            let id = self.register_function(&associated)?;
+
+            rt_class.associated.insert(name, id);
+        }
+
+        // IDs are unique
+        self.classes.insert(id, rt_class);
 
         return Ok(id);
     }
@@ -230,7 +348,7 @@ impl<'a> Interpreter<'a> {
                 Ok(OutputData::None)
             },
             Stmt::CreateConst{span,name,data}=>{
-                let data = self.interpret_expr(data)?;
+                let data = self.interpret_expr(data)?.deref(self)?;
                 let state = VarState {
                     created_at: span.clone(),
                     last_modified_at: span.clone(),
@@ -291,7 +409,7 @@ impl<'a> Interpreter<'a> {
             },
             Stmt::If{span,conditions,default}=>{
                 for (condition, block) in conditions {
-                    match self.interpret_expr(condition)? {
+                    match self.interpret_expr(condition)?.deref(self)? {
                         Data::Bool(b)=>if b {
                             return self.interpret_block(block);
                         },
@@ -308,7 +426,7 @@ impl<'a> Interpreter<'a> {
             },
             Stmt::WhileLoop{span,condition,body}=>{
                 loop {
-                    match self.interpret_expr(condition)? {
+                    match self.interpret_expr(condition)?.deref(self)? {
                         Data::Bool(b)=>if !b {break},
                         _=>return Err(Error::new(span.clone(), ErrorType::InvalidType)),
                     }
@@ -344,23 +462,19 @@ impl<'a> Interpreter<'a> {
                     Data::Integer(i)=>print!("{i}"),
                     Data::Float(f)=>print!("{f}"),
                     Data::FunctionPtr(_)=>print!("<function>"),
+                    Data::RefPath(path)=>{
+                        print!("(ref <{:?}>", path[0].1);
+                        for (_, name) in &path[1..] {
+                            print!(".<{:?}>", name);
+                        }
+                        print!(")");
+                    },
                     d=>print!("{d:?}"),
                 }
 
                 Ok(OutputData::None)
             },
-            Stmt::Class{..}=>{
-                todo!("Class stmt");
-            },
-            Stmt::Interface{..}=>{
-                todo!("Interface stmt");
-            },
-            Stmt::Enum{..}=>{
-                todo!("Enum stmt");
-            },
-            Stmt::InterfaceImpl{..}=>{
-                todo!("Interface impl stmt");
-            },
+            Stmt::Class{..}=>Ok(OutputData::None),
         }
     }
 
@@ -371,8 +485,8 @@ impl<'a> Interpreter<'a> {
                 use Data::*;
                 use BinaryOp::*;
 
-                let left = self.interpret_expr(&sides[0])?;
-                let right = self.interpret_expr(&sides[1])?;
+                let left = self.interpret_expr(&sides[0])?.deref(self)?;
+                let right = self.interpret_expr(&sides[1])?.deref(self)?;
                 let error = Error::binary(s.clone(), *op);
 
                 match (left, right) {
@@ -476,7 +590,7 @@ impl<'a> Interpreter<'a> {
                 use UnaryOp::*;
 
                 let error = Error::unary(s.clone(), *op);
-                let data = self.interpret_expr(right)?;
+                let data = self.interpret_expr(right)?.deref(self)?;
                 match data {
                     Integer(i)=>match op {
                         Negate=>Ok(Integer(-i)),
@@ -500,21 +614,11 @@ impl<'a> Interpreter<'a> {
             Expr::Field(s, left, sym)=>{
                 let left = self.interpret_expr(left)?;
 
-                match left {
-                    Data::Object(mut fields)|Data::Class(Class{inner:mut fields,..})=>{
-                        if let Some((_,data)) = fields.remove(sym) {
-                            Ok(data)
-                        } else {
-                            Err(Error::new(s.clone(), ErrorType::NoField(*sym)))
-                        }
-                    },
-                    _=>Err(Error::new(s.clone(), ErrorType::NoField(*sym))),
-                }
+                left.take_field(s.clone(), *sym)
             },
             Expr::Call(s, items)=>{
                 let left = self
-                    .interpret_expr(&items[0])?
-                    ;
+                    .interpret_expr(&items[0])?;
 
                 match left {
                     Data::FunctionPtr(ptr)=>{
@@ -579,6 +683,22 @@ impl<'a> Interpreter<'a> {
             },
             Expr::Ref(..)=>{
                 todo!("Ref expr");
+            },
+            Expr::AssociatedValue(span, left, right)=>{
+                let Some(id) = self.scope().get_class(*left) else {
+                    return Err(Error::new(span.clone(), ErrorType::UndefinedClass));
+                };
+                let class = self.classes.get(&id).unwrap();
+                let Some(func_id) = class.associated.get(&right) else {
+                    return Err(Error::two_location(
+                        class.created_at.clone(),
+                        span.clone(),
+                        "Class defined here",
+                        ErrorType::ClassHasNoAssociated,
+                    ));
+                };
+
+                Ok(Data::FunctionPtr(*func_id))
             },
         }
     }
@@ -670,7 +790,7 @@ impl ScopeStack {
     }
 
     pub fn drop_scope(&mut self) {
-        if let Some(Scope{vars}) = self.scopes.pop() {
+        if let Some(Scope{vars,..}) = self.scopes.pop() {
             for var in vars {
                 self.vars
                     .get_mut(&var)
@@ -689,7 +809,13 @@ impl ScopeStack {
 
         // test if the scope has the var already
         if scope.has_sym(sym) {
-            return Err(Error::new(state.created_at, ErrorType::VarExistsInScope));
+            let prev_state = self.vars.get(&sym).unwrap().last().unwrap();
+            return Err(Error::two_location(
+                prev_state.created_at.clone(),
+                state.created_at,
+                "Variable previously defined here",
+                ErrorType::VarExistsInScope,
+            ));
         }
 
         // add the var to the scope and storage
@@ -709,6 +835,10 @@ impl ScopeStack {
         }
 
         return Ok(());
+    }
+
+    pub fn take_var_unchecked(&mut self, sym: Symbol)->VarState {
+        self.vars.get_mut(&sym).unwrap().pop().unwrap()
     }
 
     pub fn take_var(&mut self, span: Span, sym: Symbol)->Result<Data, Error> {
@@ -807,6 +937,30 @@ impl ScopeStack {
         return Err(Error::new(span, ErrorType::VarDoesNotExist));
     }
 
+    pub fn ref_var(&mut self, span: Span, sym: Symbol)->Result<Data, Error> {
+        if self.vars.contains_key(&sym) {
+            return Ok(Data::RefPath(vec![(span, sym)]));
+        }
+
+        return Err(Error::new(span, ErrorType::VarDoesNotExist));
+    }
+
+    pub fn add_class(&mut self, sym: Symbol, id: ClassId) {
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .add_class(sym, id);
+    }
+
+    pub fn get_class(&self, sym: Symbol)->Option<ClassId> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(id) = scope.classes.get(&sym) {
+                return Some(*id);
+            }
+        }
+        return None;
+    }
+
     fn remove_undefined(&mut self, sym: Symbol) {
         if let Some(states) = self.vars.get_mut(&sym) {
             // early escape to avoid looping
@@ -834,11 +988,13 @@ impl ScopeStack {
 pub struct Scope {
     /// contains variables and functions
     vars: FnvHashSet<Symbol>,
+    classes: FnvHashMap<Symbol, ClassId>,
 }
 impl Scope {
     pub fn new()->Self {
         Scope {
             vars: FnvHashSet::default(),
+            classes: FnvHashMap::default(),
         }
     }
 
@@ -848,6 +1004,10 @@ impl Scope {
 
     pub fn remove(&mut self, sym: Symbol) {
         self.vars.remove(&sym);
+    }
+
+    pub fn add_class(&mut self, sym: Symbol, id: ClassId) {
+        self.classes.insert(sym, id);
     }
 
     pub fn has_sym(&self, sym: Symbol)->bool {
@@ -865,20 +1025,34 @@ pub struct VarState {
     data: Option<Data>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Class {
-    name: Symbol,
-    inner: Object,
-}
-
 pub struct RTFunction<'a> {
     name: Symbol,
     created_at: Span,
     inner_functions: FnvHashMap<Symbol, FunctionId>,
+    inner_classes: FnvHashMap<Symbol, ClassId>,
     params: &'a [(Span, Permissions, Symbol)],
     body: &'a [Stmt],
+}
+
+pub struct RTFunctionSignature<'a> {
+    name: Symbol,
+    created_at: Span,
+    params: &'a [(Span, Permissions, Symbol)],
+}
+
+pub struct RTClass<'a> {
+    name: Symbol,
+    permissions: Permissions,
+    created_at: Span,
+    fields: &'a [(Permissions, Symbol)],
+    methods: FnvHashMap<Symbol, FunctionId>,
+    associated: FnvHashMap<Symbol, FunctionId>,
 }
 
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionId(usize);
+
+#[repr(transparent)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct ClassId(usize);

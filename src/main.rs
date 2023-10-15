@@ -2,15 +2,13 @@
 //!     - COMMENT THE CODE!
 //!     - proper error handling
 //!     - public/private class members, classes, interfaces, functions
+//!     - reference counting
 //!     - finish parser
 //!     - tree-walking interpreter
 //!     - a proper REPL and compiler that takes CLI inputs
 //!     - parse comments
 //!     - static analysis
 //!     - types
-
-
-// #![allow(dead_code)]
 
 
 use std::{
@@ -31,7 +29,14 @@ mod parser;
 mod tree_walk;
 
 fn main() {
+    // Test the `parse_example` file, and report errors. If this succeeds, then we can benchmark
+    // the parser
     test_parser();
+
+    // I am leaving this here so we always have a performance metric to let us know if something is
+    // wrong, like if I introduce an exponential time function instead of a linear time function in
+    // the parser (unlikely).
+    benchmark_parser(200);
 
     let data = read_to_string("example").unwrap();
 
@@ -43,6 +48,9 @@ fn main() {
     // println!();
     match res {
         Ok(stmts)=>{
+            for err in parser.non_fatal_errors.drain(..) {
+                err.print(&data);
+            }
             // for stmt in stmts {
             //     println!("{:#?}", stmt);
             // }
@@ -63,13 +71,11 @@ fn main() {
         },
         Err(e)=>e.print(&data),
     }
-
-    // I am leaving this here so we always have a performance metric to let us know if something is
-    // wrong, like if I introduce an exponential time function instead of a linear time function in
-    // the parser (unlikely).
-    benchmark_parser(200);
 }
 
+/// Test the parser with the `parse_example` file. If it fails, then we have a regression. For now,
+/// this is always ran at startup. Once I finish the tree-walking interpreter, I will start making
+/// the executable more production-ready.
 fn test_parser() {
     let source = read_to_string("parse_example").unwrap();
 
@@ -83,9 +89,17 @@ fn test_parser() {
     }
 }
 
+/// Benchmarks the parser over `count` iterations and averages the time and MB/s
 #[allow(dead_code)]
 fn benchmark_parser(count: usize) {
-    let source = read_to_string("parse_example").unwrap();
+    let raw_source = read_to_string("parse_example").unwrap();
+    let mut source = String::new();
+
+    // store 4 times the data for a better average
+    source.push_str(&raw_source);
+    source.push_str(&raw_source);
+    source.push_str(&raw_source);
+    source.push_str(&raw_source);
 
     // parse the code `count` times and sum the times
     let sum_times = (0..count)
@@ -107,6 +121,11 @@ fn benchmark_parser(count: usize) {
     let mb_per_sec = bytes_per_sec / (1024.0*1024.0);
 
     // log the data
-    println!("Average parse time: {:?}", Duration::from_secs_f64(average_time));
-    println!("{:.2} MB/s", mb_per_sec);
+    println!(
+        "Total parse time: {:?} for {} iterations; Average parse time: {:?} @ {:.2} MB/s",
+        Duration::from_secs_f64(sum_times),
+        count,
+        Duration::from_secs_f64(average_time),
+        mb_per_sec,
+    );
 }

@@ -18,6 +18,7 @@ pub enum Stmt {
     DeleteVar(Span, Symbol),
     Class {
         span: Span,
+        id: usize,
         permissions: Permissions,
         name: Symbol,
         // TODO: types
@@ -51,26 +52,6 @@ pub enum Stmt {
         condition: Expr,
         body: Block,
     },
-    Interface {
-        span: Span,
-        permissions: Permissions,
-        name: Symbol,
-        methods: Vec<FunctionSignature>,
-        associated: Vec<FunctionSignature>,
-    },
-    Enum {
-        span: Span,
-        permissions: Permissions,
-        name: Symbol,
-        items: Vec<EnumItem>,
-    },
-    InterfaceImpl {
-        span: Span,
-        interface_name: Symbol,
-        class_name: Symbol,
-        methods: Vec<Function>,
-        associated: Vec<Function>,
-    },
     Expression(Span, Expr),
     Return(Span, Option<Expr>),
     Continue(Span),
@@ -89,9 +70,6 @@ impl GetSpan for Stmt {
                 SetVar{span,..}|
                 If{span,..}|
                 WhileLoop{span,..}|
-                Interface{span,..}|
-                Enum{span,..}|
-                InterfaceImpl{span,..}|
                 Expression(span, _)|
                 Return(span, _)|
                 Continue(span)|
@@ -99,15 +77,6 @@ impl GetSpan for Stmt {
                 Print(span, _)=>span.clone(),
         }
     }
-}
-
-#[derive(Debug)]
-pub enum EnumItem {
-    Name(Span, Symbol),
-    NameValue(Span, Symbol, i64),
-    // TODO: typed enums
-    // NameType(Symbol, Span, Type),
-    // NameTypeValue(Symbol, Span, Type, i64, Span),
 }
 
 #[derive(Debug)]
@@ -128,6 +97,7 @@ pub enum Expr {
     List(Span, Vec<Self>),
     Index(Span, Box<[Self;2]>),
     Object(Span, Vec<(Span, Symbol, Self)>),
+    AssociatedValue(Span, Symbol, Symbol),
 }
 impl GetSpan for Expr {
     fn span(&self)->Span {
@@ -146,7 +116,8 @@ impl GetSpan for Expr {
                 Ref(span,..)|
                 List(span,..)|
                 Index(span,..)|
-                Object(span,..)=>span.clone(),
+                Object(span,..)|
+                AssociatedValue(span,..)=>span.clone(),
         }
     }
 }
@@ -209,6 +180,7 @@ impl Display for Expr {
 
                 write!(f,"}}")?;
             },
+            AssociatedValue(_, left, right)=>write!(f,"<{:?}>::<{:?}>", left, right)?,
             BinaryOp(_, op, items)=>{
                 // parenthesize the left if it is not a literal expression
                 if items[0].is_literal() {
@@ -278,7 +250,7 @@ impl Display for Expr {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -314,7 +286,7 @@ impl Display for BinaryOp {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum UnaryOp {
     Negate,
     Not,
