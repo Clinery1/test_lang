@@ -12,7 +12,7 @@ use crate::{
 };
 
 
-pub type Object = FnvHashMap<Symbol, (VarType, Data)>;
+pub type Object = FnvHashMap<Symbol, (Permissions, Data)>;
 
 
 #[derive(Debug, Clone)]
@@ -41,7 +41,7 @@ impl Data {
         match self {
             Self::Object(inner)|Self::Class(Class{inner,..})=>{
                 if let Some((var_type, field_mut)) = inner.get_mut(&sym) {
-                    if var_type.contains(VarType::MUTATE) {
+                    if var_type.contains(Permissions::MUTATE) {
                         return Ok(field_mut);
                     } else {
                         return Err(Error::new(span, ErrorType::CannotMutate));
@@ -58,7 +58,7 @@ impl Data {
         match self {
             Self::Object(inner)|Self::Class(Class{inner,..})=>{
                 if let Some((var_type, field_mut)) = inner.get_mut(&sym) {
-                    if var_type.contains(VarType::REASSIGN) {
+                    if var_type.contains(Permissions::REASSIGN) {
                         return Ok(field_mut);
                     } else {
                         return Err(Error::new(span, ErrorType::CannotReassign));
@@ -118,7 +118,7 @@ impl<'a> Interpreter<'a> {
             scope.push_var(sym, VarState {
                 created_at: func.created_at.clone(),
                 last_modified_at: func.created_at.clone(),
-                var_type: VarType::empty(),
+                var_type: Permissions::empty(),
                 taken: None,
                 takeable: false,
                 data: Some(Data::FunctionPtr(id)),
@@ -155,7 +155,7 @@ impl<'a> Interpreter<'a> {
             self.scope().push_var(sym, VarState {
                 created_at: span.clone(),
                 last_modified_at: span,
-                var_type: VarType::empty(),
+                var_type: Permissions::empty(),
                 taken: None,
                 takeable: false,
                 data: Some(Data::FunctionPtr(id)),
@@ -229,15 +229,12 @@ impl<'a> Interpreter<'a> {
                 self.scope().take_var(s.clone(), *sym)?;
                 Ok(OutputData::None)
             },
-            // Stmt::Class{span,name,fields,methods}=>{
-            //     todo!();
-            // },
             Stmt::CreateConst{span,name,data}=>{
                 let data = self.interpret_expr(data)?;
                 let state = VarState {
                     created_at: span.clone(),
                     last_modified_at: span.clone(),
-                    var_type: VarType::empty(),
+                    var_type: Permissions::empty(),
                     taken: None,
                     takeable: false,
                     data: Some(data),
@@ -273,11 +270,15 @@ impl<'a> Interpreter<'a> {
                 let data = self.interpret_expr(data)?;
 
                 let scope = self.scope_stack.last_mut().unwrap();
-                let mut left_data = scope.get_mut_reassign(span.clone(), left[0])?;
+                let mut left_data = if left.len() == 1 {
+                    scope.get_mut_reassign(span.clone(), left[0])?
+                } else {
+                    scope.get_mut_mutate(span.clone(), left[0])?
+                };
 
                 // iterate over each field in the path to get the list
                 if left.len() >= 2 {
-                    for name in left[1..(left.len() - 2)].iter() {
+                    for name in left[1..(left.len() - 2).max(1)].iter() {
                         left_data = left_data.get_mut_mutate(span.clone(), *name)?;
                     }
 
@@ -342,12 +343,24 @@ impl<'a> Interpreter<'a> {
                     Data::Bool(b)=>print!("{b}"),
                     Data::Integer(i)=>print!("{i}"),
                     Data::Float(f)=>print!("{f}"),
+                    Data::FunctionPtr(_)=>print!("<function>"),
                     d=>print!("{d:?}"),
                 }
 
                 Ok(OutputData::None)
             },
-            _=>todo!(),
+            Stmt::Class{..}=>{
+                todo!("Class stmt");
+            },
+            Stmt::Interface{..}=>{
+                todo!("Interface stmt");
+            },
+            Stmt::Enum{..}=>{
+                todo!("Enum stmt");
+            },
+            Stmt::InterfaceImpl{..}=>{
+                todo!("Interface impl stmt");
+            },
         }
     }
 
@@ -517,9 +530,6 @@ impl<'a> Interpreter<'a> {
                 }
             },
             Expr::Bool(_, b)=>Ok(Data::Bool(*b)),
-            // Expr::Ref(s, ty, sym)=>{
-            //     todo!();
-            // },
             Expr::List(_, items)=>{
                 let mut list = Vec::with_capacity(items.len());
 
@@ -553,7 +563,23 @@ impl<'a> Interpreter<'a> {
                     _=>Err(Error::new(s.clone(), ErrorType::CannotIndex)),
                 }
             },
-            _=>todo!(),
+            Expr::Object(_, items)=>{
+                let mut map = Object::default();
+
+                for (name_span, name, expr) in items {
+                    if map.contains_key(name) {
+                        return Err(Error::new(name_span.clone(), ErrorType::FieldExists));
+                    }
+                    let data = self.interpret_expr(expr)?;
+
+                    map.insert(*name, (Permissions::all(), data));
+                }
+
+                Ok(Data::Object(map))
+            },
+            Expr::Ref(..)=>{
+                todo!("Ref expr");
+            },
         }
     }
 
@@ -579,7 +605,7 @@ impl<'a> Interpreter<'a> {
             scope.push_var(*sym, VarState {
                 created_at: span.clone(),
                 last_modified_at: span,
-                var_type: VarType::empty(),
+                var_type: Permissions::empty(),
                 taken: None,
                 takeable: false,
                 data: Some(Data::FunctionPtr(*id)),
@@ -591,7 +617,7 @@ impl<'a> Interpreter<'a> {
             scope.push_var(func.name, VarState {
                 created_at: span.clone(),
                 last_modified_at: span,
-                var_type: VarType::empty(),
+                var_type: Permissions::empty(),
                 taken: None,
                 takeable: false,
                 data: Some(Data::FunctionPtr(id)),
@@ -710,7 +736,7 @@ impl ScopeStack {
                 last.last_modified_at = span;
 
                 // if the var has no reassign privilege, then fully remove it.
-                if !last.var_type.contains(VarType::REASSIGN) {
+                if !last.var_type.contains(Permissions::REASSIGN) {
                     self.remove_undefined(sym);
                 }
 
@@ -726,7 +752,7 @@ impl ScopeStack {
     pub fn get_mut_mutate(&mut self, span: Span, sym: Symbol)->Result<&mut Data, Error> {
         if let Some(states) = self.vars.get_mut(&sym) {
             let state = states.last_mut().unwrap();
-            if state.data.is_none() || state.var_type.contains(VarType::MUTATE) {
+            if state.data.is_none() || state.var_type.contains(Permissions::MUTATE) {
                 state.taken = None;
                 state.last_modified_at = span;
 
@@ -743,7 +769,7 @@ impl ScopeStack {
     pub fn get_mut_reassign(&mut self, span: Span, sym: Symbol)->Result<&mut Data, Error> {
         if let Some(states) = self.vars.get_mut(&sym) {
             let state = states.last_mut().unwrap();
-            if state.data.is_none() || state.var_type.contains(VarType::REASSIGN) {
+            if state.data.is_none() || state.var_type.contains(Permissions::REASSIGN) {
                 state.taken = None;
                 state.last_modified_at = span;
                 if state.data.is_none() {
@@ -833,7 +859,7 @@ impl Scope {
 pub struct VarState {
     created_at: Span,
     last_modified_at: Span,
-    var_type: VarType,
+    var_type: Permissions,
     taken: Option<Span>,
     takeable: bool,
     data: Option<Data>,
@@ -849,7 +875,7 @@ pub struct RTFunction<'a> {
     name: Symbol,
     created_at: Span,
     inner_functions: FnvHashMap<Symbol, FunctionId>,
-    params: &'a [(Span, VarType, Symbol)],
+    params: &'a [(Span, Permissions, Symbol)],
     body: &'a [Stmt],
 }
 

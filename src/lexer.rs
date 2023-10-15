@@ -44,6 +44,7 @@ pub enum Token {
     #[token("enum", |_|Keyword::Enum)]
     #[token("implement", |_|Keyword::Implement)]
     #[token("for", |_|Keyword::For)]
+    #[token("pub", |_|Keyword::Public)]
     Keyword(Keyword),
     #[token("(")]
     ParenStart,
@@ -127,6 +128,7 @@ pub enum Keyword {
     Enum,
     Implement,
     For,
+    Public,
 }
 
 

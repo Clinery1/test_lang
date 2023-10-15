@@ -156,87 +156,111 @@ impl<'a> Parser<'a> {
     /// parse a statement
     pub fn parse_stmt(&mut self)->Result<Stmt, Error> {
         let mut need_ending = true;
-        let ret = match self.peek()? {
-            Token::Keyword(Keyword::Function)=>{
-                need_ending = false;
-                self.parse_function_stmt()
-            },
-            Token::Keyword(Keyword::Class)=>{
-                need_ending = false;
-                self.parse_class_stmt()
-            },
-            Token::Keyword(Keyword::If)=>{
-                need_ending = false;
-                self.parse_if_stmt()
-            },
-            Token::Keyword(Keyword::While)=>{
-                need_ending = false;
-                self.parse_while_stmt()
-            },
-            Token::Keyword(Keyword::Interface)=>{
-                need_ending = false;
-                self.parse_interface_stmt()
-            },
-            Token::Keyword(Keyword::Enum)=>{
-                need_ending = false;
-                self.parse_enum_stmt()
-            },
-            Token::Keyword(Keyword::Implement)=>{
-                need_ending = false;
-                self.parse_impl_interface_stmt()
-            },
-            Token::Keyword(Keyword::Var|Keyword::Let)=>self.parse_create_var_stmt(),
-            Token::Keyword(Keyword::Set)=>self.parse_set_var_stmt(),
-            Token::Keyword(Keyword::Const)=>self.parse_create_const_stmt(),
-            Token::Keyword(Keyword::Break)=>{
-                self.next()?;
-                Ok(Stmt::Break(self.span()))
-            },
-            Token::Keyword(Keyword::Continue)=>{
-                self.next()?;
-                Ok(Stmt::Continue(self.span()))
-            },
-            Token::Keyword(Keyword::Return)=>{
-                self.next()?;
-                let start = self.span().start;
+        let publicity = self.parse_publicity()?;
+        let ret;
+        if let Some(publicity) = publicity {
+            ret = match self.peek()? {
+                Token::Keyword(Keyword::Function)=>{
+                    need_ending = false;
+                    self.parse_function_stmt(publicity)
+                },
+                Token::Keyword(Keyword::Class)=>{
+                    need_ending = false;
+                    self.parse_class_stmt(publicity)
+                },
+                Token::Keyword(Keyword::Interface)=>{
+                    need_ending = false;
+                    self.parse_interface_stmt(publicity)
+                },
+                Token::Keyword(Keyword::Enum)=>{
+                    need_ending = false;
+                    self.parse_enum_stmt(publicity)
+                },
+                _=>Err(Error::token(self.peek_span())),
+            }?;
+        } else {
+            ret = match self.peek()? {
+                Token::Keyword(Keyword::Function)=>{
+                    need_ending = false;
+                    self.parse_function_stmt(Permissions::empty())
+                },
+                Token::Keyword(Keyword::Class)=>{
+                    need_ending = false;
+                    self.parse_class_stmt(Permissions::empty())
+                },
+                Token::Keyword(Keyword::If)=>{
+                    need_ending = false;
+                    self.parse_if_stmt()
+                },
+                Token::Keyword(Keyword::While)=>{
+                    need_ending = false;
+                    self.parse_while_stmt()
+                },
+                Token::Keyword(Keyword::Interface)=>{
+                    need_ending = false;
+                    self.parse_interface_stmt(Permissions::empty())
+                },
+                Token::Keyword(Keyword::Enum)=>{
+                    need_ending = false;
+                    self.parse_enum_stmt(Permissions::empty())
+                },
+                Token::Keyword(Keyword::Implement)=>{
+                    need_ending = false;
+                    self.parse_impl_interface_stmt()
+                },
+                Token::Keyword(Keyword::Var|Keyword::Let)=>self.parse_create_var_stmt(),
+                Token::Keyword(Keyword::Set)=>self.parse_set_var_stmt(),
+                Token::Keyword(Keyword::Const)=>self.parse_create_const_stmt(),
+                Token::Keyword(Keyword::Break)=>{
+                    self.next()?;
+                    Ok(Stmt::Break(self.span()))
+                },
+                Token::Keyword(Keyword::Continue)=>{
+                    self.next()?;
+                    Ok(Stmt::Continue(self.span()))
+                },
+                Token::Keyword(Keyword::Return)=>{
+                    self.next()?;
+                    let start = self.span().start;
 
-                let expr = match self.peek() {
-                    Ok(Token::Newline|Token::Semicolon)=>None,
-                    Ok(_)=>Some(self.parse_expr()?),
-                    Err(_)=>None,
-                };
+                    let expr = match self.peek() {
+                        Ok(Token::Newline|Token::Semicolon)=>None,
+                        Ok(_)=>Some(self.parse_expr()?),
+                        Err(_)=>None,
+                    };
 
-                let end = self.span().end;
+                    let end = self.span().end;
 
-                Ok(Stmt::Return(start..end, expr))
-            },
-            Token::Keyword(Keyword::Delete)=>{
-                self.next()?;
-                let start = self.span().start;
+                    Ok(Stmt::Return(start..end, expr))
+                },
+                Token::Keyword(Keyword::Delete)=>{
+                    self.next()?;
+                    let start = self.span().start;
 
-                let name = self.ident()?;
+                    let name = self.ident()?;
 
-                let end = self.span().end;
+                    let end = self.span().end;
 
-                Ok(Stmt::DeleteVar(start..end, name))
-            },
-            Token::Keyword(Keyword::Print)=>{
-                self.next()?;
-                let start = self.span().start;
+                    Ok(Stmt::DeleteVar(start..end, name))
+                },
+                Token::Keyword(Keyword::Print)=>{
+                    self.next()?;
+                    let start = self.span().start;
 
-                let data = self.parse_expr()?;
+                    let data = self.parse_expr()?;
 
-                let end = self.span().end;
+                    let end = self.span().end;
 
-                Ok(Stmt::Print(start..end, data))
-            },
-            _=>{
-                let start = self.peek_span().start;
-                let expr = self.parse_expr()?;
-                let end = self.span().end;
-                Ok(Stmt::Expression(start..end, expr))
-            },
-        }?;
+                    Ok(Stmt::Print(start..end, data))
+                },
+                _=>{
+                    let start = self.peek_span().start;
+                    let expr = self.parse_expr()?;
+                    let end = self.span().end;
+                    Ok(Stmt::Expression(start..end, expr))
+                },
+            }?;
+        }
 
         if need_ending {
             self.parse_stmt_end()?;
@@ -323,7 +347,7 @@ impl<'a> Parser<'a> {
     }
 
     /// parse a class definition statement
-    fn parse_class_stmt(&mut self)->Result<Stmt, Error> {
+    fn parse_class_stmt(&mut self, permissions: Permissions)->Result<Stmt, Error> {
         self.try_next(Token::Keyword(Keyword::Class))?;
         let start = self.span().start;
 
@@ -336,9 +360,11 @@ impl<'a> Parser<'a> {
         let mut methods = Vec::new();
         let mut associated = Vec::new();
 
-        self.skip_newline();
 
         loop {
+            self.skip_newline();
+            let permissions = self.parse_publicity()?.unwrap_or_default();
+
             match self.peek() {
                 Ok(Token::CurlyEnd)=>{
                     self.next()?;
@@ -346,7 +372,7 @@ impl<'a> Parser<'a> {
                 },
                 Ok(Token::Keyword(Keyword::Function))=>{
                     self.next()?;
-                    associated.push(self.parse_function_inner(FunctionType::Normal)?);
+                    associated.push(self.parse_function_inner(FunctionType::Normal, permissions)?);
                 },
                 Ok(Token::Keyword(Keyword::Var|Keyword::Let))=>{
                     let var_type = self.parse_var_type()?;
@@ -356,12 +382,12 @@ impl<'a> Parser<'a> {
                 },
                 Ok(Token::Keyword(Keyword::Mut))=>{
                     self.next()?;
-                    let method = self.parse_function_inner(FunctionType::MutableMethod)?;
+                    let method = self.parse_function_inner(FunctionType::MutableMethod, permissions)?;
 
                     methods.push(method);
                 },
                 Ok(Token::Ident(_))=>{
-                    let method = self.parse_function_inner(FunctionType::Method)?;
+                    let method = self.parse_function_inner(FunctionType::Method, permissions)?;
 
                     methods.push(method);
                 },
@@ -396,6 +422,7 @@ impl<'a> Parser<'a> {
 
         return Ok(Stmt::Class {
             span: start..end,
+            permissions,
             name,
             fields,
             methods,
@@ -449,18 +476,61 @@ impl<'a> Parser<'a> {
         });
     }
 
+    fn parse_publicity(&mut self)->Result<Option<Permissions>, Error> {
+        let mut perms = Permissions::empty();
+
+        match self.peek()? {
+            Token::Keyword(Keyword::Public)=>{
+                self.next()?;
+
+                match self.peek()? {
+                    Token::ParenStart=>{
+                        self.next()?;
+
+                        match self.next()? {
+                            Token::Keyword(Keyword::Var)=>{
+                                perms |= Permissions::PUBLIC_REASSIGN;
+                                match self.peek()? {
+                                    Token::Keyword(Keyword::Mut)=>{
+                                        self.next()?;
+                                        perms |= Permissions::PUBLIC_MUTABLE;
+                                    },
+                                    _=>{}
+                                }
+                            },
+                            Token::Keyword(Keyword::Mut)=>perms |= Permissions::PUBLIC_MUTABLE,
+                            _=>return Err(Error::token(self.span())),
+                        }
+
+                        self.try_next(Token::ParenEnd)?;
+                    },
+                    _=>perms |= Permissions::PUBLIC,
+                }
+            },
+            _=>{},
+        }
+
+        if perms.contains(Permissions::PUBLIC) {
+            return Ok(Some(perms));
+        } else {
+            return Ok(None);
+        }
+    }
+
     /// Parses the var type. Used multiple places
-    fn parse_var_type(&mut self)->Result<VarType, Error> {
-        let mut var_type = match self.next() {
-            Ok(Token::Keyword(Keyword::Var))=>VarType::REASSIGN,
-            Ok(Token::Keyword(Keyword::Let))=>VarType::empty(),
+    fn parse_var_type(&mut self)->Result<Permissions, Error> {
+        let mut var_type = Permissions::empty();
+
+        match self.next() {
+            Ok(Token::Keyword(Keyword::Var))=>var_type |= Permissions::REASSIGN,
+            Ok(Token::Keyword(Keyword::Let))=>{},
             _=>return Err(Error::token(self.span())),
-        };
+        }
 
         match self.peek() {
             Ok(Token::Keyword(Keyword::Mut))=>{
                 self.next()?;
-                var_type |= VarType::MUTATE;
+                var_type |= Permissions::MUTATE;
             },
             _=>{},
         };
@@ -494,18 +564,18 @@ impl<'a> Parser<'a> {
     }
 
     /// parses a full function using the abbreviated helper function
-    fn parse_function_stmt(&mut self)->Result<Stmt, Error> {
+    fn parse_function_stmt(&mut self, permissions: Permissions)->Result<Stmt, Error> {
         self.try_next(Token::Keyword(Keyword::Function))?;
         let start = self.span().start;
 
-        let func = self.parse_function_inner(FunctionType::Normal)?;
+        let func = self.parse_function_inner(FunctionType::Normal, permissions)?;
 
         let end = self.span().end;
 
         return Ok(Stmt::Function(start..end, func));
     }
 
-    fn parse_interface_stmt(&mut self)->Result<Stmt, Error> {
+    fn parse_interface_stmt(&mut self, permissions: Permissions)->Result<Stmt, Error> {
         self.try_next(Token::Keyword(Keyword::Interface))?;
         let start = self.span().start;
 
@@ -518,6 +588,7 @@ impl<'a> Parser<'a> {
 
         loop {
             self.skip_newline();
+            let permissions = self.parse_publicity()?.unwrap_or_default();
             match self.peek()? {
                 Token::CurlyEnd=>{
                     self.next()?;
@@ -526,19 +597,19 @@ impl<'a> Parser<'a> {
                 Token::Keyword(Keyword::Mut)=>{
                     self.next()?;
 
-                    let method = self.parse_function_signature(FunctionType::MutableMethod)?;
+                    let method = self.parse_function_signature(FunctionType::MutableMethod, permissions)?;
 
                     methods.push(method);
                 },
                 Token::Keyword(Keyword::Function)=>{
                     self.next()?;
 
-                    let func = self.parse_function_signature(FunctionType::Normal)?;
+                    let func = self.parse_function_signature(FunctionType::Normal, permissions)?;
 
                     associated.push(func);
                 },
                 Token::Ident(_)=>{
-                    let method = self.parse_function_signature(FunctionType::Method)?;
+                    let method = self.parse_function_signature(FunctionType::Method, permissions)?;
 
                     methods.push(method);
                 },
@@ -552,13 +623,14 @@ impl<'a> Parser<'a> {
 
         return Ok(Stmt::Interface {
             span: start..end,
+            permissions,
             name,
             methods,
             associated,
         });
     }
 
-    fn parse_enum_stmt(&mut self)->Result<Stmt, Error> {
+    fn parse_enum_stmt(&mut self, permissions: Permissions)->Result<Stmt, Error> {
         self.try_next(Token::Keyword(Keyword::Enum))?;
         let start = self.span().start;
 
@@ -600,6 +672,7 @@ impl<'a> Parser<'a> {
 
         return Ok(Stmt::Enum {
             span: start..end,
+            permissions,
             name,
             items,
         });
@@ -623,6 +696,8 @@ impl<'a> Parser<'a> {
         loop {
             self.skip_newline();
 
+            let permissions = self.parse_publicity()?.unwrap_or_default();
+
             match self.peek()? {
                 Token::CurlyEnd=>{
                     self.next()?;
@@ -631,19 +706,19 @@ impl<'a> Parser<'a> {
                 Token::Keyword(Keyword::Mut)=>{
                     self.next()?;
 
-                    let method = self.parse_function_inner(FunctionType::MutableMethod)?;
+                    let method = self.parse_function_inner(FunctionType::MutableMethod, permissions)?;
 
                     methods.push(method);
                 },
                 Token::Keyword(Keyword::Function)=>{
                     self.next()?;
 
-                    let func = self.parse_function_inner(FunctionType::Normal)?;
+                    let func = self.parse_function_inner(FunctionType::Normal, permissions)?;
 
                     associated.push(func);
                 },
                 Token::Ident(_)=>{
-                    let method = self.parse_function_inner(FunctionType::Method)?;
+                    let method = self.parse_function_inner(FunctionType::Method, permissions)?;
 
                     methods.push(method);
                 },
@@ -661,7 +736,7 @@ impl<'a> Parser<'a> {
         });
     }
 
-    fn parse_function_signature(&mut self, func_type: FunctionType)->Result<FunctionSignature, Error> {
+    fn parse_function_signature(&mut self, func_type: FunctionType, permissions: Permissions)->Result<FunctionSignature, Error> {
         let name = self.ident()?;
         let start = self.span().start;
 
@@ -669,6 +744,7 @@ impl<'a> Parser<'a> {
         let end = self.span().end;
 
         return Ok(FunctionSignature {
+            permissions,
             func_type,
             span: start..end,
             name,
@@ -678,7 +754,7 @@ impl<'a> Parser<'a> {
 
     /// a function statement used in class definitions and the inner part of a normal function
     /// definition.
-    fn parse_function_inner(&mut self, func_type: FunctionType)->Result<Function, Error> {
+    fn parse_function_inner(&mut self, func_type: FunctionType, permissions: Permissions)->Result<Function, Error> {
         let name = self.ident()?;
         let start = self.span().start;
 
@@ -696,6 +772,7 @@ impl<'a> Parser<'a> {
         self.function_count += 1;
 
         return Ok(Function {
+            permissions,
             func_type,
             id,
             span: start..end,
@@ -705,28 +782,28 @@ impl<'a> Parser<'a> {
         });
     }
 
-    fn parse_partial_var_type(&mut self)->Result<VarType, Error> {
+    fn parse_partial_var_type(&mut self)->Result<Permissions, Error> {
         match self.peek()? {
             Token::Keyword(Keyword::Mut)=>{
                 self.next()?;
 
-                Ok(VarType::MUTATE)
+                Ok(Permissions::MUTATE)
             },
             Token::Keyword(Keyword::Var)=>{
                 self.next()?;
                 match self.peek()? {
                     Token::Keyword(Keyword::Mut)=>{
                         self.next()?;
-                        Ok(VarType::REASSIGN | VarType::MUTATE)
+                        Ok(Permissions::REASSIGN | Permissions::MUTATE)
                     },
-                    _=>Ok(VarType::REASSIGN),
+                    _=>Ok(Permissions::REASSIGN),
                 }
             },
-            _=>Ok(VarType::empty()),
+            _=>Ok(Permissions::empty()),
         }
     }
 
-    fn parse_function_param(&mut self)->Result<(Span, VarType, Symbol), Error> {
+    fn parse_function_param(&mut self)->Result<(Span, Permissions, Symbol), Error> {
         let start = self.peek_span().start;
         let var_type = self.parse_partial_var_type()?;
 
@@ -1068,6 +1145,59 @@ impl<'a> Parser<'a> {
             Token::String(s)=>Ok(Expr::String(start, s)),
             Token::Keyword(Keyword::True)=>Ok(Expr::Bool(start, true)),
             Token::Keyword(Keyword::False)=>Ok(Expr::Bool(start, false)),
+            Token::CurlyStart=>{
+                let start = self.span().start;
+                let mut items = Vec::new();
+
+                loop {
+                    self.skip_newline();
+
+                    match self.peek() {
+                        Ok(Token::CurlyEnd)=>{
+                            self.next()?;
+                            break;
+                        },
+                        Ok(_)=>{
+                            let name = self.ident()?;
+                            let name_span = self.span();
+
+                            self.try_next(Token::Colon)?;
+
+                            let expr = match self.parse_expr() {
+                                Ok(e)=>e,
+                                Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
+                                    let span = self.peek_span();
+                                    return Err(Error::new(start..span.end, ErrorType::UnclosedCurly));
+                                },
+                                Err(e)=>return Err(e),
+                            };
+
+                            items.push((name_span, name, expr));
+                        },
+                        Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
+                            let span = self.peek_span();
+                            return Err(Error::new(start..span.end, ErrorType::UnclosedCurly));
+                        },
+                        Err(e)=>return Err(e),
+                    }
+
+                    self.skip_newline();
+
+                    match self.next() {
+                        Ok(Token::CurlyEnd)=>break,
+                        Ok(Token::Comma)=>{},
+                        Ok(_)=>return Err(Error::token(self.span())),
+                        Err(Error{err_type:ErrorType::UnexpectedEOF,..})=>{
+                            let span = self.peek_span();
+                            return Err(Error::new(start..span.end, ErrorType::UnclosedCurly));
+                        },
+                        Err(e)=>return Err(e),
+                    }
+                }
+                let end = self.span().end;
+
+                Ok(Expr::Object(start..end, items))
+            },
             Token::SquareStart=>{
                 let start = self.span().start;
                 let mut items = Vec::new();

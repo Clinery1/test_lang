@@ -44,6 +44,7 @@ pub enum ErrorType {
     TooManyParams,
     TooManyArgs,
     TypeHasNoFields,
+    FieldExists,
 }
 impl Display for ErrorType {
     fn fmt(&self, f: &mut Formatter)->FmtResult {
@@ -75,6 +76,7 @@ impl Display for ErrorType {
             TooManyParams=>write!(f,"Too many parameters for a function. The maximum is 255."),
             TooManyArgs=>write!(f,"Too many arguments for a function. The maximum is 255."),
             TypeHasNoFields=>write!(f,"Type has no fields"),
+            FieldExists=>write!(f,"Field already exists"),
         }
     }
 }

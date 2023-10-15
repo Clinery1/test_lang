@@ -18,9 +18,10 @@ pub enum Stmt {
     DeleteVar(Span, Symbol),
     Class {
         span: Span,
+        permissions: Permissions,
         name: Symbol,
         // TODO: types
-        fields: Vec<(VarType, Symbol)>,
+        fields: Vec<(Permissions, Symbol)>,
         methods: Vec<Function>,
         associated: Vec<Function>,
     },
@@ -31,7 +32,7 @@ pub enum Stmt {
     },
     CreateVar {
         span: Span,
-        var_type: VarType,
+        var_type: Permissions,
         name: Symbol,
         data: Option<Expr>,
     },
@@ -52,12 +53,14 @@ pub enum Stmt {
     },
     Interface {
         span: Span,
+        permissions: Permissions,
         name: Symbol,
         methods: Vec<FunctionSignature>,
         associated: Vec<FunctionSignature>,
     },
     Enum {
         span: Span,
+        permissions: Permissions,
         name: Symbol,
         items: Vec<EnumItem>,
     },
@@ -121,9 +124,10 @@ pub enum Expr {
     // the first item is the thing we call, or the function/method name, etc.
     Call(Span, Vec<Self>),
     Bool(Span, bool),
-    Ref(Span, VarType, Symbol),
+    Ref(Span, Permissions, Symbol),
     List(Span, Vec<Self>),
     Index(Span, Box<[Self;2]>),
+    Object(Span, Vec<(Span, Symbol, Self)>),
 }
 impl GetSpan for Expr {
     fn span(&self)->Span {
@@ -141,7 +145,8 @@ impl GetSpan for Expr {
                 Bool(span,..)|
                 Ref(span,..)|
                 List(span,..)|
-                Index(span,..)=>span.clone(),
+                Index(span,..)|
+                Object(span,..)=>span.clone(),
         }
     }
 }
@@ -149,7 +154,7 @@ impl Expr {
     fn is_literal(&self)->bool {
         use Expr::*;
         match self {
-            Named(..)|String(..)|Float(..)|Integer(..)|Bool(..)|List(..)=>true,
+            Named(..)|String(..)|Float(..)|Integer(..)|Bool(..)|List(..)|Object(..)=>true,
             _=>false,
         }
     }
@@ -177,7 +182,7 @@ impl Display for Expr {
             Ref(_, var_type, sym)=>write!(f,"ref {} <{:?}>", var_type, sym)?,
             List(_, items)=>{
                 write!(f,"[")?;
-                if items.len()>0 {
+                if items.len() > 0 {
                     for item in &items[..items.len()-1] {
                         if f.alternate() {
                             write!(f,"{}, ",item)?;
@@ -190,6 +195,20 @@ impl Display for Expr {
                 write!(f,"]")?;
             },
             Index(_, items)=>write!(f,"{}[{}]",items[0],items[1])?,
+            Object(_, items)=>{
+                write!(f,"{{")?;
+
+                if items.len() > 0 {
+                    for (_, name, expr) in &items[..items.len()-1] {
+                        write!(f,"<{:?}>: {}, ", name, expr)?;
+                    }
+
+                    let (_, name, expr) = items.last().unwrap();
+                    write!(f,"<{:?}>: {}", name, expr)?;
+                }
+
+                write!(f,"}}")?;
+            },
             BinaryOp(_, op, items)=>{
                 // parenthesize the left if it is not a literal expression
                 if items[0].is_literal() {
@@ -326,23 +345,46 @@ impl Display for FunctionType {
 
 
 bitflags::bitflags! {
-    #[derive(Debug, Copy, Clone)]
-    pub struct VarType: u32 {
+    #[derive(Debug, Copy, Clone, Default)]
+    pub struct Permissions: u32 {
+        /// Says if this is a variable
+        const IS_VARIABLE =     0b100000;
+
         /// Allows assigning a new value of the same type to the container.
         /// example: `set x = 5`
-        const REASSIGN =    0b01;
+        const REASSIGN =        0b110000;
+
         /// Allows mutation of the data in the container
         /// example: `list.push(5)`
-        const MUTATE =      0b10;
+        const MUTATE =          0b001000;
+
+        /// A public item with no mutability permissions
+        const PUBLIC =          0b000100;
+
+        /// A public mutable item
+        const PUBLIC_MUTABLE =  0b000110;
+
+        /// A reassignable public item
+        const PUBLIC_REASSIGN = 0b100101;
     }
 }
-impl Display for VarType {
+impl Display for Permissions {
     fn fmt(&self, f: &mut Formatter)->FmtResult {
-        if self.contains(VarType::MUTATE) {
+        if self.contains(Self::PUBLIC) {
+            write!(f, "pub")?;
+            if self.contains(Self::PUBLIC_MUTABLE) && self.contains(Self::PUBLIC_REASSIGN) {
+                write!(f, "(var mut)")?;
+            } else if self.contains(Self::PUBLIC_MUTABLE) {
+                write!(f, "(mut)")?;
+            } else if self.contains(Self::PUBLIC_REASSIGN) {
+                write!(f, "(var)")?;
+            }
+        }
+        if self.contains(Self::MUTATE) {
             write!(f, "mut ")?;
         }
 
-        if self.contains(VarType::REASSIGN) {
+        if self.contains(Self::REASSIGN) {
             write!(f, "var")
         } else {
             write!(f,"let")
@@ -353,12 +395,13 @@ impl Display for VarType {
 
 #[derive(Debug)]
 pub struct Function {
+    pub permissions: Permissions,
     pub func_type: FunctionType,
     pub id: usize,
     pub span: Span,
     pub name: Symbol,
     // TODO: types
-    pub params: Vec<(Span, VarType, Symbol)>,
+    pub params: Vec<(Span, Permissions, Symbol)>,
     pub body: Block,
 }
 impl GetSpan for Function {
@@ -367,11 +410,12 @@ impl GetSpan for Function {
 
 #[derive(Debug)]
 pub struct FunctionSignature {
+    pub permissions: Permissions,
     pub func_type: FunctionType,
     pub span: Span,
     pub name: Symbol,
     // TODO: types
-    pub params: Vec<(Span, VarType, Symbol)>,
+    pub params: Vec<(Span, Permissions, Symbol)>,
 }
 impl GetSpan for FunctionSignature {
     fn span(&self)->Span {self.span.clone()}
