@@ -12,7 +12,7 @@ use crate::{
 };
 
 
-pub type Object = FnvHashMap<Symbol, Data>;
+pub type Object = FnvHashMap<Symbol, (VarType, Data)>;
 
 
 #[derive(Debug, Clone)]
@@ -25,14 +25,48 @@ pub enum Data {
     Class(Class),
     List(Vec<Self>),
     Object(Object),
-    TakeVar(Span, Symbol),
+    // TakeVar(Span, Symbol),
     None,
 }
 impl Data {
-    #[inline]
-    pub fn take_from(self, prog: &mut Interpreter)->Result<Self, Error> {
-        prog.take_var(self)
+    pub fn get_mut_mutate(&mut self, span: Span, sym: Symbol)->Result<&mut Self, Error> {
+        match self {
+            Self::Object(inner)|Self::Class(Class{inner,..})=>{
+                if let Some((var_type, field_mut)) = inner.get_mut(&sym) {
+                    if var_type.contains(VarType::MUTATE) {
+                        return Ok(field_mut);
+                    } else {
+                        return Err(Error::new(span, ErrorType::CannotMutate));
+                    }
+                } else {
+                    return Err(Error::new(span, ErrorType::NoField(sym)));
+                }
+            },
+            _=>return Err(Error::new(span, ErrorType::TypeHasNoFields)),
+        }
     }
+
+    pub fn get_mut_reassign(&mut self, span: Span, sym: Symbol)->Result<&mut Self, Error> {
+        match self {
+            Self::Object(inner)|Self::Class(Class{inner,..})=>{
+                if let Some((var_type, field_mut)) = inner.get_mut(&sym) {
+                    if var_type.contains(VarType::REASSIGN) {
+                        return Ok(field_mut);
+                    } else {
+                        return Err(Error::new(span, ErrorType::CannotReassign));
+                    }
+                } else {
+                    return Err(Error::new(span, ErrorType::NoField(sym)));
+                }
+            },
+            _=>return Err(Error::new(span, ErrorType::TypeHasNoFields)),
+        }
+    }
+
+    // #[inline]
+    // pub fn take_from(self, prog: &mut Interpreter)->Result<Self, Error> {
+    //     prog.take_var(self)
+    // }
 }
 
 #[derive(Debug)]
@@ -42,7 +76,6 @@ pub enum OutputData {
     Continue,
     None,
 }
-
 
 
 pub struct Interpreter<'a> {
@@ -78,7 +111,7 @@ impl<'a> Interpreter<'a> {
                 created_at: func.created_at.clone(),
                 last_modified_at: func.created_at.clone(),
                 var_type: VarType::empty(),
-                taken: false,
+                taken: None,
                 takeable: false,
                 data: Some(Data::FunctionPtr(id)),
             }).unwrap();
@@ -115,7 +148,7 @@ impl<'a> Interpreter<'a> {
                 created_at: span.clone(),
                 last_modified_at: span,
                 var_type: VarType::empty(),
-                taken: false,
+                taken: None,
                 takeable: false,
                 data: Some(Data::FunctionPtr(id)),
             })?;
@@ -192,12 +225,12 @@ impl<'a> Interpreter<'a> {
             //     todo!();
             // },
             Stmt::CreateConst{span,name,data}=>{
-                let data = self.interpret_expr(data)?.take_from(self)?;
+                let data = self.interpret_expr(data)?;
                 let state = VarState {
                     created_at: span.clone(),
                     last_modified_at: span.clone(),
                     var_type: VarType::empty(),
-                    taken: false,
+                    taken: None,
                     takeable: false,
                     data: Some(data),
                 };
@@ -208,7 +241,7 @@ impl<'a> Interpreter<'a> {
             },
             Stmt::CreateVar{span,var_type,name,data}=>{
                 let data = if let Some(data) = data {
-                    Some(self.interpret_expr(data)?.take_from(self)?)
+                    Some(self.interpret_expr(data)?)
                 } else {
                     None
                 };
@@ -217,7 +250,7 @@ impl<'a> Interpreter<'a> {
                     created_at: span.clone(),
                     last_modified_at: span.clone(),
                     var_type: *var_type,
-                    taken: false,
+                    taken: None,
                     takeable: true,
                     data,
                 };
@@ -227,23 +260,29 @@ impl<'a> Interpreter<'a> {
                 Ok(OutputData::None)
             },
             Stmt::SetVar{span,left,data}=>{
-                let left = self.interpret_expr(left)?;
+                assert!(left.len() > 0);
 
-                match left {
-                    Data::TakeVar(_, sym)=>{
-                        let data = self.interpret_expr(data)?.take_from(self)?;
+                let data = self.interpret_expr(data)?;
 
-                        self.scope().assign_var(span.clone(), sym, data)?;
+                let scope = self.scope_stack.last_mut().unwrap();
+                let mut left_data = scope.get_mut_reassign(span.clone(), left[0])?;
 
-                    },
-                    _=>todo!(),
+                // iterate over each field in the path to get the list
+                if left.len() >= 2 {
+                    for name in left[1..(left.len() - 2)].iter() {
+                        left_data = left_data.get_mut_mutate(span.clone(), *name)?;
+                    }
+
+                    left_data = left_data.get_mut_reassign(span.clone(), *left.last().unwrap())?;
                 }
+
+                *left_data = data;
 
                 Ok(OutputData::None)
             },
             Stmt::If{span,conditions,default}=>{
                 for (condition, block) in conditions {
-                    match self.interpret_expr(condition)?.take_from(self)? {
+                    match self.interpret_expr(condition)? {
                         Data::Bool(b)=>if b {
                             return self.interpret_block(block);
                         },
@@ -260,7 +299,7 @@ impl<'a> Interpreter<'a> {
             },
             Stmt::WhileLoop{span,condition,body}=>{
                 loop {
-                    match self.interpret_expr(condition)?.take_from(self)? {
+                    match self.interpret_expr(condition)? {
                         Data::Bool(b)=>if !b {break},
                         _=>return Err(Error::new(span.clone(), ErrorType::InvalidType)),
                     }
@@ -276,19 +315,19 @@ impl<'a> Interpreter<'a> {
                 return Ok(OutputData::None);
             },
             Stmt::Expression(_, expr)=>{
-                self.interpret_expr(expr)?.take_from(self)?;
+                self.interpret_expr(expr)?;
 
                 Ok(OutputData::None)
             },
             Stmt::Return(_, maybe_expr)=>if let Some(expr) = maybe_expr {
-                Ok(OutputData::Return(Some(self.interpret_expr(expr)?.take_from(self)?)))
+                Ok(OutputData::Return(Some(self.interpret_expr(expr)?)))
             } else {
                 Ok(OutputData::Return(None))
             },
             Stmt::Continue(_)=>Ok(OutputData::Continue),
             Stmt::Break(_)=>Ok(OutputData::Break),
             Stmt::Print(_, expr)=>{
-                let data = self.interpret_expr(expr)?.take_from(self)?;
+                let data = self.interpret_expr(expr)?;
 
                 match data {
                     Data::String(s)=>print!("{s}"),
@@ -304,13 +343,6 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    pub fn take_var(&mut self, data: Data)->Result<Data, Error> {
-        match data {
-            Data::TakeVar(span, sym)=>self.scope().take_var(span, sym),
-            d=>Ok(d),
-        }
-    }
-
     pub fn interpret_expr(&mut self, expr: &'a Expr)->Result<Data, Error> {
         match expr {
             Expr::Copy(s, sym)=>self.scope().copy_var(s.clone(),*sym),
@@ -318,8 +350,8 @@ impl<'a> Interpreter<'a> {
                 use Data::*;
                 use BinaryOp::*;
 
-                let left = self.interpret_expr(&sides[0])?.take_from(self)?;
-                let right = self.interpret_expr(&sides[1])?.take_from(self)?;
+                let left = self.interpret_expr(&sides[0])?;
+                let right = self.interpret_expr(&sides[1])?;
                 let error = Error::binary(s.clone(), *op);
 
                 match (left, right) {
@@ -423,7 +455,7 @@ impl<'a> Interpreter<'a> {
                 use UnaryOp::*;
 
                 let error = Error::unary(s.clone(), *op);
-                let data = self.interpret_expr(right)?.take_from(self)?;
+                let data = self.interpret_expr(right)?;
                 match data {
                     Integer(i)=>match op {
                         Negate=>Ok(Integer(-i)),
@@ -443,13 +475,13 @@ impl<'a> Interpreter<'a> {
             Expr::Integer(_, i)=>Ok(Data::Integer(*i)),
             Expr::Float(_, f)=>Ok(Data::Float(*f)),
             Expr::String(_, string)=>Ok(Data::String(string.clone())),
-            Expr::Named(s, sym)=>Ok(Data::TakeVar(s.clone(), *sym)),
+            Expr::Named(s, sym)=>self.scope().take_var(s.clone(), *sym),
             Expr::Field(s, left, sym)=>{
-                let left = self.interpret_expr(left)?.take_from(self)?;
+                let left = self.interpret_expr(left)?;
 
                 match left {
                     Data::Object(mut fields)|Data::Class(Class{inner:mut fields,..})=>{
-                        if let Some(data) = fields.remove(sym) {
+                        if let Some((_,data)) = fields.remove(sym) {
                             Ok(data)
                         } else {
                             Err(Error::new(s.clone(), ErrorType::NoField(*sym)))
@@ -461,14 +493,14 @@ impl<'a> Interpreter<'a> {
             Expr::Call(s, items)=>{
                 let left = self
                     .interpret_expr(&items[0])?
-                    .take_from(self)?;
+                    ;
 
                 match left {
                     Data::FunctionPtr(ptr)=>{
                         let mut args = Vec::new();
 
                         for expr in &items[1..] {
-                            args.push(self.interpret_expr(expr)?.take_from(self)?);
+                            args.push(self.interpret_expr(expr)?);
                         }
 
                         self.interpret_function_call(s.clone(), ptr, args)
@@ -484,17 +516,17 @@ impl<'a> Interpreter<'a> {
                 let mut list = Vec::with_capacity(items.len());
 
                 for item in items {
-                    list.push(self.interpret_expr(item)?.take_from(self)?);
+                    list.push(self.interpret_expr(item)?);
                 }
 
                 Ok(Data::List(list))
             },
             Expr::Index(s, sides)=>{
-                let left = self.interpret_expr(&sides[0])?.take_from(self)?;
+                let left = self.interpret_expr(&sides[0])?;
 
                 match left {
                     Data::List(mut items)=>{
-                        match self.interpret_expr(&sides[1])?.take_from(self)? {
+                        match self.interpret_expr(&sides[1])? {
                             Data::Integer(i)=>{
                                 if i < 0 {
                                     Err(Error::new(s.clone(), ErrorType::CannotIndex))
@@ -540,7 +572,7 @@ impl<'a> Interpreter<'a> {
                 created_at: span.clone(),
                 last_modified_at: span,
                 var_type: VarType::empty(),
-                taken: false,
+                taken: None,
                 takeable: false,
                 data: Some(Data::FunctionPtr(*id)),
             })?;
@@ -552,7 +584,7 @@ impl<'a> Interpreter<'a> {
                 created_at: span.clone(),
                 last_modified_at: span,
                 var_type: VarType::empty(),
-                taken: false,
+                taken: None,
                 takeable: false,
                 data: Some(Data::FunctionPtr(id)),
             })?;
@@ -567,7 +599,7 @@ impl<'a> Interpreter<'a> {
                 created_at: span.clone(),
                 last_modified_at: span.clone(),
                 var_type: *var_type,
-                taken: false,
+                taken: None,
                 takeable: true,
                 data: Some(arg),
             })?;
@@ -633,7 +665,7 @@ impl ScopeStack {
             .or_default();
 
         if let Some(last) = states.last_mut() {
-            if last.taken {
+            if last.taken.is_some() {
                 *last = state;
             } else {
                 states.push(state);
@@ -659,7 +691,8 @@ impl ScopeStack {
 
             if let Some(data) = last.data.take() {
                 // mark the var as taken so we can clean it up later, if needed
-                last.taken = true;
+                last.taken = Some(span.clone());
+                last.last_modified_at = span;
 
                 // if the var has no reassign privilege, then fully remove it.
                 if !last.var_type.contains(VarType::REASSIGN) {
@@ -675,21 +708,47 @@ impl ScopeStack {
         return Err(Error::new(span, ErrorType::VarDoesNotExist));
     }
 
-    pub fn assign_var(&mut self, span: Span, sym: Symbol, data: Data)->Result<(), Error> {
+    pub fn get_mut_mutate(&mut self, span: Span, sym: Symbol)->Result<&mut Data, Error> {
         if let Some(states) = self.vars.get_mut(&sym) {
             let state = states.last_mut().unwrap();
-            if state.data.is_none() || state.var_type.contains(VarType::REASSIGN) {
-                state.taken = false;
+            if state.data.is_none() || state.var_type.contains(VarType::MUTATE) {
+                state.taken = None;
                 state.last_modified_at = span;
-                state.data = Some(data);
 
-                return Ok(());
+                return Ok(state.data.as_mut().unwrap());
             } else {
                 return Err(Error::new(span, ErrorType::CannotReassign));
             }
         }
 
         return Err(Error::new(span, ErrorType::VarDoesNotExist));
+    }
+
+    /// Data MUST be assigned to the reference to maintain the proper internal state.
+    pub fn get_mut_reassign(&mut self, span: Span, sym: Symbol)->Result<&mut Data, Error> {
+        if let Some(states) = self.vars.get_mut(&sym) {
+            let state = states.last_mut().unwrap();
+            if state.data.is_none() || state.var_type.contains(VarType::REASSIGN) {
+                state.taken = None;
+                state.last_modified_at = span;
+                if state.data.is_none() {
+                    state.data = Some(Data::None);
+                }
+
+                return Ok(state.data.as_mut().unwrap());
+            } else {
+                return Err(Error::new(span, ErrorType::CannotReassign));
+            }
+        }
+
+        return Err(Error::new(span, ErrorType::VarDoesNotExist));
+    }
+
+    pub fn assign_var(&mut self, span: Span, sym: Symbol, data: Data)->Result<(), Error> {
+        let mutable_data = self.get_mut_reassign(span, sym)?;
+        *mutable_data = data;
+
+        return Ok(());
     }
 
     /// TODO: verify the var can actually be copied
@@ -710,14 +769,14 @@ impl ScopeStack {
     fn remove_taken(&mut self, sym: Symbol) {
         if let Some(states) = self.vars.get_mut(&sym) {
             // early escape to avoid looping
-            if !states.last().unwrap().taken {
+            if states.last().unwrap().taken.is_none() {
                 return;
             }
 
             for scope in self.scopes.iter_mut().rev() {
                 if scope.has_sym(sym) {
                     let last = states.last().unwrap();
-                    if last.taken {
+                    if last.taken.is_some() {
                         states.pop();
                         scope.remove(sym);
                     } else {
@@ -760,7 +819,7 @@ pub struct VarState {
     created_at: Span,
     last_modified_at: Span,
     var_type: VarType,
-    taken: bool,
+    taken: Option<Span>,
     takeable: bool,
     data: Option<Data>,
 }

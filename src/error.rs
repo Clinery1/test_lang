@@ -36,6 +36,9 @@ pub enum ErrorType {
     InvalidType,
     InvalidFunctionArgs,
     FunctionExists,
+    TooManyParams,
+    TooManyArgs,
+    TypeHasNoFields,
 }
 
 

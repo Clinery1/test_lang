@@ -22,6 +22,7 @@ pub enum Stmt {
         // TODO: types
         fields: Vec<(VarType, Symbol)>,
         methods: Vec<Function>,
+        associated: Vec<Function>,
     },
     CreateConst {
         span: Span,
@@ -36,7 +37,7 @@ pub enum Stmt {
     },
     SetVar {
         span: Span,
-        left: Expr,
+        left: Vec<Symbol>,
         data: Expr,
     },
     If {
@@ -48,6 +49,24 @@ pub enum Stmt {
         span: Span,
         condition: Expr,
         body: Block,
+    },
+    Interface {
+        span: Span,
+        name: Symbol,
+        methods: Vec<FunctionSignature>,
+        associated: Vec<FunctionSignature>,
+    },
+    Enum {
+        span: Span,
+        name: Symbol,
+        items: Vec<EnumItem>,
+    },
+    InterfaceImpl {
+        span: Span,
+        interface_name: Symbol,
+        class_name: Symbol,
+        methods: Vec<Function>,
+        associated: Vec<Function>,
     },
     Expression(Span, Expr),
     Return(Span, Option<Expr>),
@@ -67,6 +86,9 @@ impl GetSpan for Stmt {
                 SetVar{span,..}|
                 If{span,..}|
                 WhileLoop{span,..}|
+                Interface{span,..}|
+                Enum{span,..}|
+                InterfaceImpl{span,..}|
                 Expression(span, _)|
                 Return(span, _)|
                 Continue(span)|
@@ -74,6 +96,15 @@ impl GetSpan for Stmt {
                 Print(span, _)=>span.clone(),
         }
     }
+}
+
+#[derive(Debug)]
+pub enum EnumItem {
+    Name(Span, Symbol),
+    NameValue(Span, Symbol, i64),
+    // TODO: typed enums
+    // NameType(Symbol, Span, Type),
+    // NameTypeValue(Symbol, Span, Type, i64, Span),
 }
 
 #[derive(Debug)]
@@ -278,6 +309,21 @@ impl Display for UnaryOp {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum FunctionType {
+    Method,
+    MutableMethod,
+    Normal,
+}
+impl Display for FunctionType {
+    fn fmt(&self, f: &mut Formatter)->FmtResult {
+        match self {
+            Self::MutableMethod=>write!(f,"mut "),
+            _=>Ok(()),
+        }
+    }
+}
+
 
 bitflags::bitflags! {
     #[derive(Debug, Copy, Clone)]
@@ -307,6 +353,7 @@ impl Display for VarType {
 
 #[derive(Debug)]
 pub struct Function {
+    pub func_type: FunctionType,
     pub id: usize,
     pub span: Span,
     pub name: Symbol,
@@ -315,6 +362,18 @@ pub struct Function {
     pub body: Block,
 }
 impl GetSpan for Function {
+    fn span(&self)->Span {self.span.clone()}
+}
+
+#[derive(Debug)]
+pub struct FunctionSignature {
+    pub func_type: FunctionType,
+    pub span: Span,
+    pub name: Symbol,
+    // TODO: types
+    pub params: Vec<(Span, VarType, Symbol)>,
+}
+impl GetSpan for FunctionSignature {
     fn span(&self)->Span {self.span.clone()}
 }
 

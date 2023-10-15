@@ -24,6 +24,7 @@ pub struct Parser<'a> {
     lookahead: [Option<Result<Token, ()>>;2],
     spans: [Span;3],
     function_count: usize,
+    non_fatal_errors: Vec<Error>,
 }
 impl<'a> Parser<'a> {
     /// Create a new parser from a source string
@@ -34,6 +35,7 @@ impl<'a> Parser<'a> {
             lookahead: [None, None],
             spans: [0..0, 0..0, 0..0],
             function_count: 0,
+            non_fatal_errors: Vec::new(),
         };
         ret.next().ok();
         ret.next().ok();
@@ -132,6 +134,10 @@ impl<'a> Parser<'a> {
         self.lookahead[0].is_none()
     }
 
+    fn push_err(&mut self, err: Error) {
+        self.non_fatal_errors.push(err);
+    }
+
     /// parse a file's worth of statements
     pub fn parse_file(&mut self)->Result<Vec<Stmt>, Error> {
         let mut items = Vec::new();
@@ -149,14 +155,39 @@ impl<'a> Parser<'a> {
 
     /// parse a statement
     pub fn parse_stmt(&mut self)->Result<Stmt, Error> {
+        let mut need_ending = true;
         let ret = match self.peek()? {
-            Token::Keyword(Keyword::Function)=>self.parse_function_stmt(),
-            Token::Keyword(Keyword::Var|Keyword::Let|Keyword::Mut)=>self.parse_create_var_stmt(),
+            Token::Keyword(Keyword::Function)=>{
+                need_ending = false;
+                self.parse_function_stmt()
+            },
+            Token::Keyword(Keyword::Class)=>{
+                need_ending = false;
+                self.parse_class_stmt()
+            },
+            Token::Keyword(Keyword::If)=>{
+                need_ending = false;
+                self.parse_if_stmt()
+            },
+            Token::Keyword(Keyword::While)=>{
+                need_ending = false;
+                self.parse_while_stmt()
+            },
+            Token::Keyword(Keyword::Interface)=>{
+                need_ending = false;
+                self.parse_interface_stmt()
+            },
+            Token::Keyword(Keyword::Enum)=>{
+                need_ending = false;
+                self.parse_enum_stmt()
+            },
+            Token::Keyword(Keyword::Implement)=>{
+                need_ending = false;
+                self.parse_impl_interface_stmt()
+            },
+            Token::Keyword(Keyword::Var|Keyword::Let)=>self.parse_create_var_stmt(),
             Token::Keyword(Keyword::Set)=>self.parse_set_var_stmt(),
             Token::Keyword(Keyword::Const)=>self.parse_create_const_stmt(),
-            Token::Keyword(Keyword::Class)=>self.parse_class_stmt(),
-            Token::Keyword(Keyword::If)=>self.parse_if_stmt(),
-            Token::Keyword(Keyword::While)=>self.parse_while_stmt(),
             Token::Keyword(Keyword::Break)=>{
                 self.next()?;
                 Ok(Stmt::Break(self.span()))
@@ -207,15 +238,22 @@ impl<'a> Parser<'a> {
             },
         }?;
 
-        match self.peek() {
-            Ok(Token::Newline|Token::Semicolon)=>{
-                self.next()?;
-            },
-            Ok(_)=>return Err(Error::new(self.peek_span(), ErrorType::LineEnding)),
-            _=>{},
+        if need_ending {
+            self.parse_stmt_end()?;
         }
 
         return Ok(ret);
+    }
+
+    fn parse_stmt_end(&mut self)->Result<(), Error> {
+        match self.peek() {
+            Ok(Token::Newline|Token::Semicolon)=>{
+                self.next()?;
+                Ok(())
+            },
+            Ok(_)=>Err(Error::new(self.peek_span(), ErrorType::LineEnding)),
+            _=>Ok(()),
+        }
     }
 
     /// parse a while loop statement
@@ -296,6 +334,7 @@ impl<'a> Parser<'a> {
 
         let mut fields = Vec::new();
         let mut methods = Vec::new();
+        let mut associated = Vec::new();
 
         self.skip_newline();
 
@@ -305,15 +344,24 @@ impl<'a> Parser<'a> {
                     self.next()?;
                     break;
                 },
-                Ok(Token::Keyword(Keyword::Var|Keyword::Let|Keyword::Mut))=>{
+                Ok(Token::Keyword(Keyword::Function))=>{
+                    self.next()?;
+                    associated.push(self.parse_function_inner(FunctionType::Normal)?);
+                },
+                Ok(Token::Keyword(Keyword::Var|Keyword::Let))=>{
                     let var_type = self.parse_var_type()?;
-
                     let name = self.ident()?;
 
                     fields.push((var_type, name));
                 },
+                Ok(Token::Keyword(Keyword::Mut))=>{
+                    self.next()?;
+                    let method = self.parse_function_inner(FunctionType::MutableMethod)?;
+
+                    methods.push(method);
+                },
                 Ok(Token::Ident(_))=>{
-                    let method = self.parse_abrv_function_stmt()?;
+                    let method = self.parse_function_inner(FunctionType::Method)?;
 
                     methods.push(method);
                 },
@@ -351,6 +399,7 @@ impl<'a> Parser<'a> {
             name,
             fields,
             methods,
+            associated,
         });
     }
 
@@ -359,7 +408,13 @@ impl<'a> Parser<'a> {
         self.try_next(Token::Keyword(Keyword::Set))?;
         let start = self.span().start;
 
-        let left = self.parse_expr()?;
+        let mut left = vec![self.ident()?];
+
+        while let Ok(Token::Dot) = self.peek() {
+            self.next()?;
+
+            left.push(self.ident()?);
+        }
 
         self.try_next(Token::Assign)?;
 
@@ -396,17 +451,18 @@ impl<'a> Parser<'a> {
 
     /// Parses the var type. Used multiple places
     fn parse_var_type(&mut self)->Result<VarType, Error> {
-        let mut var_type = match self.peek() {
-            Ok(Token::Keyword(Keyword::Mut))=>{
-                self.next()?;
-                VarType::MUTATE
-            },
-            _=>VarType::empty(),
-        };
-        var_type |= match self.next() {
+        let mut var_type = match self.next() {
             Ok(Token::Keyword(Keyword::Var))=>VarType::REASSIGN,
             Ok(Token::Keyword(Keyword::Let))=>VarType::empty(),
-            _=>return Err(Error::token(self.peek_span())),
+            _=>return Err(Error::token(self.span())),
+        };
+
+        match self.peek() {
+            Ok(Token::Keyword(Keyword::Mut))=>{
+                self.next()?;
+                var_type |= VarType::MUTATE;
+            },
+            _=>{},
         };
 
         return Ok(var_type);
@@ -442,20 +498,195 @@ impl<'a> Parser<'a> {
         self.try_next(Token::Keyword(Keyword::Function))?;
         let start = self.span().start;
 
-        let func = self.parse_abrv_function_stmt()?;
+        let func = self.parse_function_inner(FunctionType::Normal)?;
 
         let end = self.span().end;
 
         return Ok(Stmt::Function(start..end, func));
     }
 
-    /// a function statement used in class definitions and the inner part of a normal function
-    /// definition.
-    fn parse_abrv_function_stmt(&mut self)->Result<Function, Error> {
+    fn parse_interface_stmt(&mut self)->Result<Stmt, Error> {
+        self.try_next(Token::Keyword(Keyword::Interface))?;
+        let start = self.span().start;
+
+        let name = self.ident()?;
+
+        self.try_next(Token::CurlyStart)?;
+
+        let mut methods = Vec::new();
+        let mut associated = Vec::new();
+
+        loop {
+            self.skip_newline();
+            match self.peek()? {
+                Token::CurlyEnd=>{
+                    self.next()?;
+                    break;
+                },
+                Token::Keyword(Keyword::Mut)=>{
+                    self.next()?;
+
+                    let method = self.parse_function_signature(FunctionType::MutableMethod)?;
+
+                    methods.push(method);
+                },
+                Token::Keyword(Keyword::Function)=>{
+                    self.next()?;
+
+                    let func = self.parse_function_signature(FunctionType::Normal)?;
+
+                    associated.push(func);
+                },
+                Token::Ident(_)=>{
+                    let method = self.parse_function_signature(FunctionType::Method)?;
+
+                    methods.push(method);
+                },
+                _=>return Err(Error::token(self.peek_span())),
+            }
+
+            self.parse_stmt_end()?;
+        }
+
+        let end = self.span().end;
+
+        return Ok(Stmt::Interface {
+            span: start..end,
+            name,
+            methods,
+            associated,
+        });
+    }
+
+    fn parse_enum_stmt(&mut self)->Result<Stmt, Error> {
+        self.try_next(Token::Keyword(Keyword::Enum))?;
+        let start = self.span().start;
+
+        let name = self.ident()?;
+
+        self.try_next(Token::CurlyStart)?;
+        let mut items = Vec::new();
+
+        loop {
+            match self.peek()? {
+                Token::CurlyEnd=>{
+                    self.next()?;
+                    break;
+                },
+                Token::Ident(_)=>{
+                    let name = self.ident()?;
+                    let span = self.span();
+
+                    match self.peek()? {
+                        Token::Assign=>{
+                            self.next()?;
+
+                            let val = match self.next()? {
+                                Token::Integer(n)=>n,
+                                _=>return Err(Error::token(self.span())),
+                            };
+                            let end = self.span().end;
+
+                            items.push(EnumItem::NameValue(span.start..end, name, val));
+                        },
+                        _=>items.push(EnumItem::Name(span, name)),
+                    }
+                },
+                _=>return Err(Error::token(self.peek_span())),
+            }
+        }
+
+        let end = self.span().end;
+
+        return Ok(Stmt::Enum {
+            span: start..end,
+            name,
+            items,
+        });
+    }
+
+    fn parse_impl_interface_stmt(&mut self)->Result<Stmt, Error> {
+        self.try_next(Token::Keyword(Keyword::Implement))?;
+        let start = self.span().start;
+
+        let interface_name = self.ident()?;
+
+        self.try_next(Token::Keyword(Keyword::For))?;
+
+        let class_name = self.ident()?;
+
+        self.try_next(Token::CurlyStart)?;
+
+        let mut methods = Vec::new();
+        let mut associated = Vec::new();
+
+        loop {
+            self.skip_newline();
+
+            match self.peek()? {
+                Token::CurlyEnd=>{
+                    self.next()?;
+                    break;
+                },
+                Token::Keyword(Keyword::Mut)=>{
+                    self.next()?;
+
+                    let method = self.parse_function_inner(FunctionType::MutableMethod)?;
+
+                    methods.push(method);
+                },
+                Token::Keyword(Keyword::Function)=>{
+                    self.next()?;
+
+                    let func = self.parse_function_inner(FunctionType::Normal)?;
+
+                    associated.push(func);
+                },
+                Token::Ident(_)=>{
+                    let method = self.parse_function_inner(FunctionType::Method)?;
+
+                    methods.push(method);
+                },
+                _=>return Err(Error::token(self.peek_span())),
+            }
+        }
+        let end = self.span().end;
+
+        return Ok(Stmt::InterfaceImpl {
+            span: start..end,
+            interface_name,
+            class_name,
+            methods,
+            associated,
+        });
+    }
+
+    fn parse_function_signature(&mut self, func_type: FunctionType)->Result<FunctionSignature, Error> {
         let name = self.ident()?;
         let start = self.span().start;
 
         let params = self.parse_paren_list(Self::parse_function_param)?;
+        let end = self.span().end;
+
+        return Ok(FunctionSignature {
+            func_type,
+            span: start..end,
+            name,
+            params,
+        });
+    }
+
+    /// a function statement used in class definitions and the inner part of a normal function
+    /// definition.
+    fn parse_function_inner(&mut self, func_type: FunctionType)->Result<Function, Error> {
+        let name = self.ident()?;
+        let start = self.span().start;
+
+        let params = self.parse_paren_list(Self::parse_function_param)?;
+
+        if params.len() > u8::MAX as usize {
+            self.push_err(Error::new(self.span(), ErrorType::TooManyParams));
+        }
 
         let body = self.parse_block()?;
 
@@ -465,6 +696,7 @@ impl<'a> Parser<'a> {
         self.function_count += 1;
 
         return Ok(Function {
+            func_type,
             id,
             span: start..end,
             name,
@@ -473,25 +705,30 @@ impl<'a> Parser<'a> {
         });
     }
 
-    fn parse_function_param(&mut self)->Result<(Span, VarType, Symbol), Error> {
-        let start = self.peek_span().start;
-        let var_type = match self.peek()? {
+    fn parse_partial_var_type(&mut self)->Result<VarType, Error> {
+        match self.peek()? {
             Token::Keyword(Keyword::Mut)=>{
                 self.next()?;
-                match self.peek()? {
-                    Token::Keyword(Keyword::Var)=>{
-                        self.next()?;
-                        VarType::REASSIGN | VarType::MUTATE
-                    },
-                    _=>VarType::MUTATE,
-                }
+
+                Ok(VarType::MUTATE)
             },
             Token::Keyword(Keyword::Var)=>{
                 self.next()?;
-                VarType::REASSIGN
+                match self.peek()? {
+                    Token::Keyword(Keyword::Mut)=>{
+                        self.next()?;
+                        Ok(VarType::REASSIGN | VarType::MUTATE)
+                    },
+                    _=>Ok(VarType::REASSIGN),
+                }
             },
-            _=>VarType::empty(),
-        };
+            _=>Ok(VarType::empty()),
+        }
+    }
+
+    fn parse_function_param(&mut self)->Result<(Span, VarType, Symbol), Error> {
+        let start = self.peek_span().start;
+        let var_type = self.parse_partial_var_type()?;
 
         let name = self.ident()?;
         let end = self.span().end;
@@ -622,6 +859,11 @@ impl<'a> Parser<'a> {
                 Ok(Token::ParenStart)=>{
                     let start = self.peek_span().start;
                     let mut items = self.parse_paren_list(Self::parse_expr)?;
+
+                    if items.len() > u8::MAX as usize {
+                        self.push_err(Error::new(self.span(), ErrorType::TooManyArgs));
+                    }
+
                     items.insert(0, left);
                     let end = self.span().end;
 

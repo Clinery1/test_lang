@@ -40,6 +40,10 @@ pub enum Token {
     #[token("break", |_|Keyword::Break)]
     #[token("continue", |_|Keyword::Continue)]
     #[token("print", |_|Keyword::Print)]
+    #[token("interface", |_|Keyword::Interface)]
+    #[token("enum", |_|Keyword::Enum)]
+    #[token("implement", |_|Keyword::Implement)]
+    #[token("for", |_|Keyword::For)]
     Keyword(Keyword),
     #[token("(")]
     ParenStart,
@@ -119,6 +123,10 @@ pub enum Keyword {
     Break,
     Continue,
     Print,
+    Interface,
+    Enum,
+    Implement,
+    For,
 }
 
 

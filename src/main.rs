@@ -1,6 +1,7 @@
 //! TODO:
 //!     - COMMENT THE CODE!
 //!     - proper error handling
+//!     - public/private class members, classes, interfaces, functions
 //!     - finish parser
 //!     - tree-walking interpreter
 //!     - a proper REPL and compiler that takes CLI inputs
@@ -30,6 +31,8 @@ mod parser;
 mod tree_walk;
 
 fn main() {
+    test_parser();
+
     let data = read_to_string("example").unwrap();
 
     let mut parser = Parser::new(&data);
@@ -43,7 +46,7 @@ fn main() {
             // for stmt in stmts {
             //     println!("{:#?}", stmt);
             // }
-            
+
             let mut interpreter = tree_walk::Interpreter::new();
 
             println!("Running code...");
@@ -67,9 +70,22 @@ fn main() {
     benchmark_parser(200);
 }
 
+fn test_parser() {
+    let source = read_to_string("parse_example").unwrap();
+
+    let mut parser = Parser::new(&source);
+    match parser.parse_file() {
+        Err(e)=>{
+            e.print(&source);
+            panic!("Parse failed!");
+        },
+        _=>{},
+    }
+}
+
 #[allow(dead_code)]
 fn benchmark_parser(count: usize) {
-    let source = read_to_string("example").unwrap();
+    let source = read_to_string("parse_example").unwrap();
 
     // parse the code `count` times and sum the times
     let sum_times = (0..count)
