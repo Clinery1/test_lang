@@ -686,7 +686,7 @@ impl ScopeStack {
     }
 
     pub fn take_var(&mut self, span: Span, sym: Symbol)->Result<Data, Error> {
-        self.remove_taken(sym);
+        self.remove_undefined(sym);
 
         if let Some(states) = self.vars.get_mut(&sym) {
             let last = states
@@ -697,11 +697,13 @@ impl ScopeStack {
                 return Ok(last.data.clone().unwrap());
             }
 
-            if let Some(data) = last.data.take() {
+            if let Some(data) = &last.data {
                 // return early if the data can be copied
                 if data.is_copy() {
                     return Ok(data.clone());
                 }
+
+                let data = last.data.take().unwrap();
 
                 // mark the var as taken so we can clean it up later, if needed
                 last.taken = Some(span.clone());
@@ -709,7 +711,7 @@ impl ScopeStack {
 
                 // if the var has no reassign privilege, then fully remove it.
                 if !last.var_type.contains(VarType::REASSIGN) {
-                    self.remove_taken(sym);
+                    self.remove_undefined(sym);
                 }
 
                 return Ok(data);
@@ -766,7 +768,7 @@ impl ScopeStack {
 
     /// TODO: verify the var can actually be copied
     pub fn copy_var(&mut self, span: Span, sym: Symbol)->Result<Data, Error> {
-        self.remove_taken(sym);
+        self.remove_undefined(sym);
 
         if let Some(states) = self.vars.get_mut(&sym) {
             if let Some(data) = &states.last().unwrap().data {
@@ -779,7 +781,7 @@ impl ScopeStack {
         return Err(Error::new(span, ErrorType::VarDoesNotExist));
     }
 
-    fn remove_taken(&mut self, sym: Symbol) {
+    fn remove_undefined(&mut self, sym: Symbol) {
         if let Some(states) = self.vars.get_mut(&sym) {
             // early escape to avoid looping
             if states.last().unwrap().taken.is_none() {
