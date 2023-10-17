@@ -1,12 +1,3 @@
-interface Debug {
-    fmt(mut formatter)
-}
-
-interface Default {
-    function default()
-}
-
-
 class Person {
     let name; var occupation
 
@@ -17,20 +8,6 @@ class Person {
 
     mut setOccupation(newOccupation) {
         set this.occupation = newOccupation
-    }
-}
-implement Default for Person {
-    function default() {
-        Person("", "")
-    }
-}
-implement Debug for Person {
-    fmt(mut f) {
-        f.writeStr("Person {name: ")
-        f.writeStr(copy this.name)
-        f.writeStr(", occupation: ")
-        f.writeStr(copy this.occupation)
-        f.writeStr("}")
     }
 }
 

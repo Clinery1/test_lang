@@ -41,6 +41,7 @@ pub enum Token {
     #[token("continue", |_|Keyword::Continue)]
     #[token("print", |_|Keyword::Print)]
     #[token("pub", |_|Keyword::Public)]
+    #[token("constructor", |_|Keyword::Constructor)]
     Keyword(Keyword),
     #[token("(")]
     ParenStart,
@@ -123,6 +124,7 @@ pub enum Keyword {
     Continue,
     Print,
     Public,
+    Constructor,
 }
 
 

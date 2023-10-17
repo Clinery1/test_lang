@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+
+
 use string_interner::DefaultSymbol as Symbol;
 use logos::Span;
 use std::{
@@ -52,6 +55,8 @@ pub enum ErrorType {
     AssociatedMethodRedefined,
     UndefinedClass,
     ClassHasNoAssociated,
+    ConstructorRedefined,
+    ConstructorRequired,
 }
 impl ErrorType {
     pub fn err_num(&self)->u16 {
@@ -88,6 +93,8 @@ impl ErrorType {
             AssociatedMethodRedefined=>27,
             UndefinedClass=>28,
             ClassHasNoAssociated=>29,
+            ConstructorRedefined=>30,
+            ConstructorRequired=>31,
         }
     }
 }
@@ -126,6 +133,8 @@ impl Display for ErrorType {
             AssociatedMethodRedefined=>write!(f,"Associated class function redefined here"),
             UndefinedClass=>write!(f,"Class is not defined"),
             ClassHasNoAssociated=>write!(f,"The class has no associated function"),
+            ConstructorRedefined=>write!(f,"Class constructor redefined here"),
+            ConstructorRequired=>write!(f,"A constructor is required for classes with fields"),
         }
     }
 }

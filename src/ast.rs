@@ -21,6 +21,7 @@ pub enum Stmt {
         id: usize,
         permissions: Permissions,
         name: Symbol,
+        constructor: Option<Function>,
         // TODO: types
         fields: Vec<(Permissions, Symbol)>,
         methods: Vec<Function>,
@@ -90,7 +91,10 @@ pub enum Expr {
     String(Span, String),
     Named(Span, Symbol),
     Field(Span, Box<Self>, Symbol),
-    // the first item is the thing we call, or the function/method name, etc.
+    // the first item is the method left side
+    MethodCall(Span, Symbol, Vec<Self>),
+    AssociatedCall(Span, Symbol, Vec<Self>),
+    // the first item is the left side expression
     Call(Span, Vec<Self>),
     Bool(Span, bool),
     Ref(Span, Permissions, Symbol),
@@ -111,6 +115,8 @@ impl GetSpan for Expr {
                 String(span,..)|
                 Named(span,..)|
                 Field(span,..)|
+                MethodCall(span,..)|
+                AssociatedCall(span,..)|
                 Call(span,..)|
                 Bool(span,..)|
                 Ref(span,..)|
@@ -184,9 +190,11 @@ impl Display for Expr {
             BinaryOp(_, op, items)=>{
                 // parenthesize the left if it is not a literal expression
                 if items[0].is_literal() {
-                    write!(f, "{}", items[0])?;
+                    items[0].fmt(f)?;
                 } else {
-                    write!(f, "({})", items[0])?;
+                    write!(f,"(")?;
+                    items[0].fmt(f)?;
+                    write!(f,")")?;
                 }
 
                 // add spaces if we need to and print the operator
@@ -198,14 +206,16 @@ impl Display for Expr {
 
                 // parenthesize the right if it is not a literal expression
                 if items[1].is_literal() {
-                    write!(f, "{}", items[1])?;
+                    items[1].fmt(f)?;
                 } else {
-                    write!(f, "({})", items[1])?;
+                    write!(f,"(")?;
+                    items[1].fmt(f)?;
+                    write!(f,")")?;
                 }
             },
             UnaryOp(_, op, item)=>{
                 // print the operator
-                write!(f, "{}", op)?;
+                op.fmt(f)?;
 
                 // parenthesize the inner expression if it is not a literal
                 if item.is_literal() {
@@ -220,6 +230,47 @@ impl Display for Expr {
             } else {
                 // add parenthesis to a complex left expression
                 write!(f, "({}).<{:?}>", left, name)?;
+            },
+            AssociatedCall(_, name, items)=>{
+                write!(f,"<{:?}>(", name)?;
+                // if we have arguments to the call, print them
+                if items.len() > 0 {
+                    // print second to second-to-last args
+                    for item in &items[..items.len()-1] {
+                        write!(f, "{}", item)?;
+                        // add space if needed
+                        if f.alternate() {
+                            write!(f, ", ")?;
+                        } else {
+                            write!(f, ",")?;
+                        }
+                    }
+                    write!(f, "{}", items.last().unwrap())?;
+                }
+                write!(f, ")")?;
+            },
+            MethodCall(_, name, items)=>{
+                if items[0].is_literal()||items[0].is_trailing_expr() {
+                    write!(f,"{}.<{:?}>(", items[0], name)?;
+                } else {
+                    // add parenthesis to a complex left expression
+                    write!(f,"({}).<{:?}>(", items[0], name)?;
+                }
+                // if we have arguments to the call, print them
+                if items.len() > 1 {
+                    // print second to second-to-last args
+                    for item in &items[1..items.len()-1] {
+                        write!(f, "{}", item)?;
+                        // add space if needed
+                        if f.alternate() {
+                            write!(f, ", ")?;
+                        } else {
+                            write!(f, ",")?;
+                        }
+                    }
+                    write!(f, "{}", items.last().unwrap())?;
+                }
+                write!(f, ")")?;
             },
             Call(_, items)=>{
                 if items[0].is_literal()||items[0].is_trailing_expr() {
@@ -317,7 +368,7 @@ impl Display for FunctionType {
 
 
 bitflags::bitflags! {
-    #[derive(Debug, Copy, Clone, Default)]
+    #[derive(Debug, Copy, Clone, Default, PartialEq)]
     pub struct Permissions: u32 {
         /// Says if this is a variable
         const IS_VARIABLE =     0b100000;

@@ -1,3 +1,25 @@
+class Person {
+    let name
+    var occupation
+    constructor(name, occupation) {
+        set this.name = name
+        set this.occupation = occupation
+    }
+
+    mut setOccupation(newOccupation) {
+        set this.occupation = newOccupation
+    }
+
+    printName() {
+        print (copy this).name
+        print " does "
+        print (copy this).occupation
+        print "\n"
+        return this
+    }
+}
+
+
 function fizzBuzz() {
     var count = 1
 
@@ -83,4 +105,8 @@ print "\n"
 
 set myObject.x = 0
 
-let fizzBuzz = 0
+var example = Person("Chris", "programming")
+set example = example.printName()
+
+print example
+print "\n"

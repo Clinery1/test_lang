@@ -26,9 +26,10 @@ mod error;
 mod lexer;
 mod ast;
 mod parser;
-mod tree_walk;
 
 fn main() {
+    test_expr_parser();
+
     // Test the `parse_example` file, and report errors. If this succeeds, then we can benchmark
     // the parser
     test_parser();
@@ -40,36 +41,49 @@ fn main() {
 
     let data = read_to_string("example").unwrap();
 
-    let mut parser = Parser::new(&data);
+    let (mut parser, _this_sym) = Parser::new(&data);
     let res = parser.parse_file();
     // for (sym, name) in parser.lexer.extras.into_iter() {
     //     println!("{:?} = {}", sym, name);
     // }
     // println!();
     match res {
-        Ok(stmts)=>{
+        Ok(_stmts)=>{
+            let error = parser.non_fatal_errors.len() > 0;
             for err in parser.non_fatal_errors.drain(..) {
                 err.print(&data);
             }
-            // for stmt in stmts {
+            if error {
+                return;
+            }
+
+            // for stmt in stmts.iter() {
             //     println!("{:#?}", stmt);
             // }
 
-            let mut interpreter = tree_walk::Interpreter::new();
-
-            println!("Running code...");
-            let start = Instant::now();
-            let out = interpreter.interpret_program(&stmts);
-            let elapsed = start.elapsed();
-            match out {
-                Ok(d)=>{
-                    println!("Code output: {:?}", d);
-                    println!("Execution took {:?}", elapsed);
-                },
-                Err(e)=>e.print(&data),
-            }
+            // println!("Running code...");
+            // let start = Instant::now();
+            // let elapsed = start.elapsed();
+            // match out {
+            //     Ok(d)=>{
+            //         println!("Code output: {:?}", d);
+            //         println!("Execution took {:?}", elapsed);
+            //     },
+            //     Err(e)=>e.print(&data),
+            // }
         },
         Err(e)=>e.print(&data),
+    }
+}
+
+fn test_expr_parser() {
+    let source = read_to_string("expr_test").unwrap();
+
+    let (mut parser, _) = Parser::new(&source);
+    let mut expr_parser = parser::expr::ExprParser::new(&mut parser);
+    match expr_parser.parse() {
+        Ok(e)=>println!("{:#}", e),
+        Err(e)=>e.print(&source),
     }
 }
 
@@ -79,7 +93,7 @@ fn main() {
 fn test_parser() {
     let source = read_to_string("parse_example").unwrap();
 
-    let mut parser = Parser::new(&source);
+    let (mut parser, _) = Parser::new(&source);
     match parser.parse_file() {
         Err(e)=>{
             e.print(&source);
@@ -104,7 +118,7 @@ fn benchmark_parser(count: usize) {
     // parse the code `count` times and sum the times
     let sum_times = (0..count)
         .map(|_|{
-            let mut parser = Parser::new(&source);
+            let (mut parser, _) = Parser::new(&source);
             let start = Instant::now();
             let _parsed = black_box(parser.parse_file().unwrap());
             let elapsed = start.elapsed();

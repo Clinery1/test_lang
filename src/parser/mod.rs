@@ -9,6 +9,10 @@ use crate::{
     lexer::*,
     ast::*,
 };
+// use expr::*;
+
+
+pub mod expr;
 
 
 /// A parser using techniques inspired by left-corner parsers, we have a (hopefully) linear-time
@@ -25,12 +29,17 @@ pub struct Parser<'a> {
     lookahead: [Option<Result<Token, ()>>;2],
     spans: [Span;3],
     id_count: usize,
+    constructor_sym: Symbol,
 }
 impl<'a> Parser<'a> {
     /// Create a new parser from a source string
-    pub fn new(source: &'a str)->Self {
-        let lexer = Token::lexer(source).spanned();
+    pub fn new(source: &'a str)->(Self, Symbol) {
+        let mut lexer = Token::lexer(source).spanned();
+
+        let this_sym = lexer.extras.get_or_intern("this");
+
         let mut ret = Parser {
+            constructor_sym: lexer.extras.get_or_intern("constructor"),
             lexer,
             lookahead: [None, None],
             spans: [0..0, 0..0, 0..0],
@@ -42,7 +51,7 @@ impl<'a> Parser<'a> {
         ret.next().ok();
         ret.next().ok();
 
-        return ret;
+        return (ret, this_sym);
     }
 
     /// a helper function to peek at the next token
@@ -348,6 +357,7 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
         let mut associated = Vec::new();
+        let mut constructor: Option<Function> = None;
 
 
         loop {
@@ -358,6 +368,18 @@ impl<'a> Parser<'a> {
                 Ok(Token::CurlyEnd)=>{
                     self.next()?;
                     break;
+                },
+                Ok(Token::Keyword(Keyword::Constructor))=>{
+                    let new_constructor = self.parse_function_inner(FunctionType::Normal, permissions)?;
+                    if let Some(c) = constructor {
+                        self.push_err(Error::two_location(
+                            c.span(),
+                            new_constructor.span(),
+                            "Constructor previously defined here",
+                            ErrorType::ConstructorRedefined,
+                        ));
+                    }
+                    constructor = Some(new_constructor);
                 },
                 Ok(Token::Keyword(Keyword::Function))=>{
                     self.next()?;
@@ -413,11 +435,16 @@ impl<'a> Parser<'a> {
 
         let end = self.span().end;
 
+        if fields.len() > 0 && constructor.is_none() {
+            self.push_err(Error::new(start..end, ErrorType::ConstructorRequired));
+        }
+
         return Ok(Stmt::Class {
             span: start..end,
             id: self.get_id(),
             permissions,
             name,
+            constructor,
             fields,
             methods,
             associated,
@@ -518,7 +545,7 @@ impl<'a> Parser<'a> {
 
         match self.next() {
             Ok(Token::Keyword(Keyword::Var))=>var_type |= Permissions::REASSIGN,
-            Ok(Token::Keyword(Keyword::Let))=>{},
+            Ok(Token::Keyword(Keyword::Let))=>var_type |= Permissions::IS_VARIABLE,
             _=>return Err(Error::token(self.span())),
         }
 
@@ -571,26 +598,30 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a function signature
-    fn parse_function_signature(&mut self, func_type: FunctionType, permissions: Permissions)->Result<FunctionSignature, Error> {
-        let name = self.ident()?;
-        let start = self.span().start;
+    // fn parse_function_signature(&mut self, func_type: FunctionType, permissions: Permissions)->Result<FunctionSignature, Error> {
+    //     let name = self.ident()?;
+    //     let start = self.span().start;
 
-        let params = self.parse_paren_list(Self::parse_function_param)?;
-        let end = self.span().end;
+    //     let params = self.parse_paren_list(Self::parse_function_param)?;
+    //     let end = self.span().end;
 
-        return Ok(FunctionSignature {
-            permissions,
-            func_type,
-            span: start..end,
-            name,
-            params,
-        });
-    }
+    //     return Ok(FunctionSignature {
+    //         permissions,
+    //         func_type,
+    //         span: start..end,
+    //         name,
+    //         params,
+    //     });
+    // }
 
     /// a function statement used in class definitions and the inner part of a normal function
     /// definition.
     fn parse_function_inner(&mut self, func_type: FunctionType, permissions: Permissions)->Result<Function, Error> {
-        let name = self.ident()?;
+        let name = match self.next()? {
+            Token::Ident(i)=>i,
+            Token::Keyword(Keyword::Constructor)=>self.constructor_sym,
+            _=>return Err(Error::ident(self.span())),
+        };
         let start = self.span().start;
 
         let params = self.parse_paren_list(Self::parse_function_param)?;
@@ -782,10 +813,20 @@ impl<'a> Parser<'a> {
                         self.push_err(Error::new(self.span(), ErrorType::TooManyArgs));
                     }
 
-                    items.insert(0, left);
                     let end = self.span().end;
 
-                    left = Expr::Call(start..end, items);
+                    left = match left {
+                        Expr::Field(span, left, sym)=>{
+                            items.insert(0, *left);
+
+                            Expr::MethodCall(span.start..end, sym, items)
+                        },
+                        Expr::Named(span, name)=>Expr::AssociatedCall(span.start..end, name, items),
+                        d=>{
+                            items.insert(0, d);
+                            Expr::Call(start..end, items)
+                        },
+                    };
                 },
                 Ok(Token::Newline)=>{
                     match self.peek1() {
