@@ -1,0 +1,17 @@
+[package]
+name = "test_lang"
+version = "0.1.0"
+edition = "2021"
+authors = ["Chris (Clinery) <clinery8237@gmail.com>"]
+readme = "README.md"
+repository = "https://github.com/Clinery1/test_lang"
+license = "MIT OR Apache-2.0"
+
+
+[dependencies]
+bitflags = "2.4.0"
+fnv = "1.0.7"
+logos = "0.13.0"
+num_enum = "0.7.0"
+string-interner = "0.14.0"
+test_lang_common = { version = "0.1.0", path = "../common" }

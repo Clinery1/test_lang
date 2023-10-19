@@ -1,8 +1,6 @@
 #![allow(dead_code)]
 
 
-use string_interner::DefaultSymbol as Symbol;
-use logos::Span;
 use std::{
     fmt::{
         Display,
@@ -11,20 +9,14 @@ use std::{
     },
     ops::RangeInclusive,
 };
-use crate::{
-    ast::{
-        BinaryOp,
-        UnaryOp,
-    },
-    lexer::Token,
-};
+use crate::Span;
 
 
 /// A simple error type enum. Will probably have to write a `Display` impl for it later, but
 /// `Debug` is enough for now.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ErrorType {
-    ExpectedToken(Token),
+    ExpectedToken(String),
     ExpectedIdent,
     UnclosedParen,
     UnclosedCurly,
@@ -37,9 +29,9 @@ pub enum ErrorType {
     VarUndefined,
     CannotReassign,
     CannotMutate,
-    BinaryOperationNotSupported(BinaryOp),
-    UnaryOperationNotSupported(UnaryOp),
-    NoField(Symbol),
+    BinaryOperationNotSupported(String),
+    UnaryOperationNotSupported(String),
+    NoField(String),
     CannotCall,
     CannotIndex,
     ArrayOutOfBounds,
@@ -180,13 +172,13 @@ impl Error {
 
     #[inline]
     /// Create a new `BinaryOperationNotSupported` error
-    pub fn binary(span: Span, op: BinaryOp)->Self {
+    pub fn binary(span: Span, op: String)->Self {
         Self::new(span, ErrorType::BinaryOperationNotSupported(op))
     }
 
     #[inline]
     /// Create a new `UnaryOperationNotSupported` error
-    pub fn unary(span: Span, op: UnaryOp)->Self {
+    pub fn unary(span: Span, op: String)->Self {
         Self::new(span, ErrorType::UnaryOperationNotSupported(op))
     }
 

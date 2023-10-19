@@ -28,7 +28,8 @@ pub struct Parser<'a> {
     pub non_fatal_errors: Vec<Error>,
     lookahead: [Option<Result<Token, ()>>;2],
     spans: [Span;3],
-    id_count: usize,
+    func_count: usize,
+    class_count: usize,
     constructor_sym: Symbol,
 }
 impl<'a> Parser<'a> {
@@ -43,7 +44,8 @@ impl<'a> Parser<'a> {
             lexer,
             lookahead: [None, None],
             spans: [0..0, 0..0, 0..0],
-            id_count: 0,
+            func_count: 0,
+            class_count: 0,
             non_fatal_errors: Vec::new(),
         };
 
@@ -122,7 +124,7 @@ impl<'a> Parser<'a> {
             self.next()?;
             return Ok(());
         }
-        return Err(Error::new(self.peek_span(), ErrorType::ExpectedToken(tok)));
+        return Err(Error::new(self.peek_span(), ErrorType::ExpectedToken(format!("{:?}", tok))));
     }
 
     /// Match an `Ident` token and return its symbol
@@ -150,9 +152,14 @@ impl<'a> Parser<'a> {
         self.non_fatal_errors.push(err);
     }
 
-    fn get_id(&mut self)->usize {
-        self.id_count += 1;
-        return self.id_count - 1;
+    fn get_class_id(&mut self)->usize {
+        self.class_count += 1;
+        return self.class_count - 1;
+    }
+
+    fn get_func_id(&mut self)->usize {
+        self.func_count += 1;
+        return self.func_count - 1;
     }
 
     /// parse a file's worth of statements
@@ -325,7 +332,7 @@ impl<'a> Parser<'a> {
                         },
                         Ok(_)=>return Err(Error::new(
                             self.peek1_span(),
-                            ErrorType::ExpectedToken(Token::Keyword(Keyword::If)),
+                            ErrorType::ExpectedToken("if".to_string()),
                         )),
                         Err(e)=>return Err(e),
                     }
@@ -441,7 +448,7 @@ impl<'a> Parser<'a> {
 
         return Ok(Stmt::Class {
             span: start..end,
-            id: self.get_id(),
+            id: self.get_class_id(),
             permissions,
             name,
             constructor,
@@ -637,7 +644,7 @@ impl<'a> Parser<'a> {
         return Ok(Function {
             permissions,
             func_type,
-            id: self.get_id(),
+            id: self.get_func_id(),
             span: start..end,
             name,
             params,
@@ -896,7 +903,7 @@ impl<'a> Parser<'a> {
                 // continue: there may be more expressions
                 Ok(Token::Comma)=>{},
                 // any unexpected token is an `Expected parenthesis` error
-                Ok(_)=>return Err(Error::new(self.span(), ErrorType::ExpectedToken(Token::ParenEnd))),
+                Ok(_)=>return Err(Error::new(self.span(), ErrorType::ExpectedToken(")".to_string()))),
                 Err(e)=>{
                     // EOF errors are converted to unclosed paren errors
                     if e.err_type() == &ErrorType::UnexpectedEOF {

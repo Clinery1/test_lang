@@ -20,12 +20,16 @@ use std::{
     fs::read_to_string,
 };
 use parser::Parser;
+pub use test_lang_common::{
+    error,
+    Span,
+};
 
 
-mod error;
 mod lexer;
 mod ast;
 mod parser;
+mod static_analysis;
 
 fn main() {
     test_expr_parser();

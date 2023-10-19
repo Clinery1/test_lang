@@ -1,0 +1,11 @@
+[package]
+name = "test_lang_common"
+version = "0.1.0"
+edition = "2021"
+authors = ["Chris (Clinery) <clinery8237@gmail.com>"]
+readme = "README.md"
+repository = "https://github.com/Clinery1/test_lang"
+license = "MIT OR Apache-2.0"
+
+
+[dependencies]
